@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' file: data: blob:; media-src 'self' file: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>幻想时刻</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- 侧边栏 -->
+    <aside id="sidebar">
+      <div class="brand">
+        <img id="brandIcon" src="assets/logo.png" alt="" onerror="this.style.display='none'" />
+        <span>幻想时刻</span>
+      </div>
+      <nav class="nav">
+        <button class="nav-btn active" data-view="chat">对话生成</button>
+        <button class="nav-btn" data-view="local">本地模型</button>
+        <button class="nav-btn" data-view="tasks">任务记录</button>
+        <button class="nav-btn" data-view="settings">设置</button>
+        <button class="nav-btn" data-view="about">关于</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div id="hwSummary" class="hw-summary">正在探测硬件…</div>
+        <div id="trackBadge" class="track-badge">自检模式</div>
+      </div>
+    </aside>
+
+    <!-- 主区域 -->
+    <main id="main">
+      <!-- 对话视图 -->
+      <section class="view active" id="view-chat">
+        <header class="view-header">
+          <h1>对话生成</h1>
+          <div class="header-actions">
+            <button id="btnCheckUpdate" class="ghost-btn" title="检测更新">检测更新</button>
+          </div>
+        </header>
+        <div id="chatLog" class="chat-log"></div>
+        <div class="composer">
+          <div id="imagePreviewRow" class="image-preview-row"></div>
+          <div class="composer-row">
+            <button id="btnAddImage" class="icon-btn" title="上传图片">＋图片</button>
+            <textarea id="promptInput" rows="2" placeholder="描述你想要的视频，例如：让这张照片里的人自然地微笑、转头。可上传图片做图生视频…"></textarea>
+            <button id="btnSend" class="primary-btn">生成</button>
+          </div>
+          <div class="composer-hint">
+            <label><input type="checkbox" id="chkOffline" /> 离线本地生成</label>
+            <span id="routeHint" class="route-hint">输入描述后可预览将使用哪个模型</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 本地模型视图 -->
+      <section class="view" id="view-local">
+        <header class="view-header"><h1>本地模型（免密钥离线生成）</h1></header>
+        <div id="localBody" class="view-body"><p class="muted">加载中…</p></div>
+      </section>
+
+      <!-- 任务记录 -->
+      <section class="view" id="view-tasks">
+        <header class="view-header"><h1>任务记录</h1></header>
+        <div id="tasksBody" class="view-body"><p class="muted">暂无任务。</p></div>
+      </section>
+
+      <!-- 设置 -->
+      <section class="view" id="view-settings">
+        <header class="view-header"><h1>设置</h1></header>
+        <div class="view-body">
+          <h2>云端 API Key</h2>
+          <p class="muted">密钥用系统级加密（Windows DPAPI）保存在本机，明文不落盘、不入仓库、不随安装包分发。真实生成需你自备密钥，本软件不内置额度、不代付。</p>
+          <div id="keysBody" class="keys-body"></div>
+          <h2>百炼地域端点</h2>
+          <div class="field">
+            <label>WorkspaceId（业务空间 ID，留空用通用端点）</label>
+            <input type="text" id="cfgWorkspace" placeholder="例如 llm-xxxxxxxx" />
+          </div>
+          <h2>更新加速镜像（可选）</h2>
+          <div class="field">
+            <label>每行一个镜像地址，探测时与官方通道并行竞速</label>
+            <textarea id="cfgMirrors" rows="3" placeholder="https://gh.example.com"></textarea>
+          </div>
+          <div class="field-row">
+            <label><input type="checkbox" id="cfgAutoUpdate" /> 启动时自动检查更新</label>
+          </div>
+          <button id="btnSaveConfig" class="primary-btn">保存设置</button>
+        </div>
+      </section>
+
+      <!-- 关于 -->
+      <section class="view" id="view-about">
+        <header class="view-header"><h1>关于</h1></header>
+        <div class="view-body">
+          <h2 id="aboutName">幻想时刻</h2>
+          <p>版本 <span id="aboutVersion">—</span></p>
+          <p class="muted">对话式 AI 视频生成桌面软件。云端接口（百炼通义万相 / SiliconFlow）+ 本地免密钥（LTX-Video 2B）双轨生成，智能模型路由，多通道并行自动更新。</p>
+          <div id="aboutDetail" class="about-detail"></div>
+          <h2>能力边界（如实说明）</h2>
+          <ul class="muted">
+            <li>真实生成需自备 API Key；无 Key 且未装本地模型时仅能走「自检模式」，产出带水印的样例视频，非真实 AI 结果。</li>
+            <li>海外模型通道本机网络实测不可达，仅保留接口位，探测到可达才启用。</li>
+            <li>本地轨受显存限制：8GB 显存出片约 480p / 5 秒，单条数分钟。</li>
+            <li>安装包未做代码签名，首次运行 Windows 可能提示风险，需手动放行。</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 更新进度浮层 -->
+  <div id="updateOverlay" class="overlay hidden">
+    <div class="overlay-card">
+      <h3 id="updateTitle">检测更新</h3>
+      <div id="updateBody" class="update-body"></div>
+      <div class="overlay-actions">
+        <button id="updateClose" class="ghost-btn">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

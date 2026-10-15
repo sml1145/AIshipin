@@ -1,0 +1,57 @@
+appId: com.sml1145.huanxiangshike
+productName: 幻想时刻
+copyright: Copyright © 2026 sml1145
+
+# 安装包文件名用 ASCII，避免 electron-updater 解析 latest.yml 时出现编码问题
+artifactName: HuanXiangShiKe-Setup-${version}.${ext}
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - package.json
+  - models.json
+  - src/**/*
+  - "!**/*.map"
+  - "!**/*.md"
+
+# ffmpeg 是原生二进制，必须解包到 asar 之外才能被执行
+asar: true
+asarUnpack:
+  - node_modules/@ffmpeg-installer/**
+
+# 本地推理的 Python 脚本以纯文本资源形式随包分发，同样解包
+extraResources:
+  - from: src/local
+    to: local
+    filter:
+      - "**/*.py"
+      - "**/*.txt"
+      - "**/*.json"
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # 本次未购买代码签名证书；更新完整性改由 Ed25519 manifest 签名 + SHA512 保证
+  signAndEditExecutable: false
+
+nsis:
+  oneClick: false
+  # per-user 安装到 %LOCALAPPDATA%\Programs\幻想时刻 —— 免 UAC，静默升级不弹管理员框
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 幻想时刻
+  deleteAppDataOnUninstall: false
+  # 生成 blockmap，支持 electron-updater 差分更新
+  differentialPackage: true
+
+publish:
+  provider: github
+  owner: sml1145
+  repo: AIshipin
+  releaseType: release

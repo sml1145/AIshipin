@@ -1,0 +1,29 @@
+node_modules/
+release/
+dist/
+*.log
+npm-debug.log*
+.env
+.env.*
+
+# 运行时下载物与本地模型权重，绝不入仓（体积大且可重新获取）
+runtime/
+models-store/
+downloads/
+
+# 用户配置与加密密钥
+userdata/
+config.json
+secrets.bin
+
+# 构建缓存
+.cache/
+*.tsbuildinfo
+
+# 图标中间产物（保留 build/icon.ico 与 icon-src.png 供打包使用）
+build/ico-stages/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini

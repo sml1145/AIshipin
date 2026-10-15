@@ -1,0 +1,538 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-15",
+  "remoteSource": {
+    "urls": [
+      "https://raw.githubusercontent.com/sml1145/AIshipin/main/models.json",
+      "https://github.com/sml1145/AIshipin/raw/main/models.json"
+    ],
+    "note": "模型能力库可远程热更新：新增模型或调整擅长领域只需改这份 JSON，无需重新编译软件"
+  },
+  "facts": {
+    "modelIdPolicy": "本文件的 modelIdVerified 字段区分两类：true = 已核对官方文档模型清单（2026-10-15）；false = 尚未核对，界面会提示用户按其控制台实际可用清单核对。真实调用前软件会先用 listModels 从通道拉取可用清单并用 match.pattern 匹配，避免模型名不存在导致整批失败。",
+    "dashscopeEndpoint": "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis（通用）；百炼新地域端点为 https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1/...，可在设置中填 WorkspaceId 切换。文档要求模型、Endpoint、API Key 必须同一地域，跨地域调用会失败。",
+    "dashscopeImagePolicy": "DashScope 的 input.media[].url 官方示例均为 http(s) URL。本地图片能否用 data:base64 直传官方文档未明确，本软件会先尝试 data URL，若通道拒绝则明确提示需改用支持 base64 的 SiliconFlow 通道或先上传图片取得 URL。不假装一定可用。",
+    "siliconflowImagePolicy": "SiliconFlow 官方文档明确 image 字段支持 'data:image/png;base64,XXX' 或图片 URL，故本地图生视频优先走此通道。image_size 为必填且仅接受 1280x720 / 720x1280 / 960x960。",
+    "modelscopePolicy": "ModelScope API-Inference 的视频生成端点官方文档未获取，因此本版不将其作为视频生成通道，只保留占位并在界面标注不可用，避免写出编造的端点。",
+    "hardwareProbe": "vramGB/ramGB 基于实测硬件 RTX 4060 Laptop 8GB 显存 / 15.2GB 内存。路由按实际探测结果过滤跑不动的模型。"
+  },
+  "intents": {
+    "portrait_motion": {
+      "label": "人像动态/让照片动起来",
+      "keywords": ["人像", "人物", "照片动", "让照片动起来", "动起来", "表情", "微笑", "眨眼", "转头", "行走", "走路", "跳舞", "舞蹈", "模特", "脸部", "头像", "自拍", "全身"]
+    },
+    "audio_video": {
+      "label": "有声视频/台词BGM音效",
+      "keywords": ["有声", "音频", "配音", "口型", "说话", "讲话", "台词", "旁白", "音乐", "音效", "bgm", "背景乐", "歌声", "朗读", "对白", "数字人", "音画同步", "对口型"]
+    },
+    "realistic": {
+      "label": "写实/电影感",
+      "keywords": ["写实", "真实", "实拍", "电影感", "电影级", "纪录片", "真人", "photorealistic", "cinematic", "4k", "超清", "高清", "质感", "1080p"]
+    },
+    "anime": {
+      "label": "动漫/二次元",
+      "keywords": ["动漫", "二次元", "卡通", "动画", "番剧", "漫画风", "手绘", "anime", "赛璐璐", "吉卜力", "国漫", "日漫", "水墨", "国风"]
+    },
+    "landscape": {
+      "label": "风景/建筑/空镜",
+      "keywords": ["风景", "建筑", "空镜", "山水", "城市", "街景", "自然风光", "海边", "雪山", "森林", "日落", "星空", "镜头稳定", "延时", "航拍", "古镇", "桥梁", "湖面"]
+    },
+    "product_ad": {
+      "label": "产品广告/电商展示",
+      "keywords": ["产品", "电商", "商品", "展示", "带货", "广告", "包装", "淘宝", "瓶身", "logo", "品牌", "宣传片", "商业", "营销", "试色", "美妆"]
+    },
+    "micro_loop": {
+      "label": "微动效/无缝循环",
+      "keywords": ["微动效", "循环", "无缝循环", "gif", "静物微动", "轻微摆动", "飘动", "呼吸感", "动态壁纸", "缓慢旋转", "360度旋转", "转一圈"]
+    },
+    "fast_vertical": {
+      "label": "极速/竖版短视频",
+      "keywords": ["快速", "极速", "秒出", "草稿", "预览", "竖版", "竖屏", "9:16", "短视频", "抖音", "快手", "小红书", "赶时间", "flash"]
+    },
+    "first_last_frame": {
+      "label": "首尾帧/转场衔接",
+      "keywords": ["首尾帧", "首帧", "尾帧", "转场", "衔接", "过渡", "开始画面", "结束画面", "两张图", "起止", "kf2v"]
+    },
+    "long_duration": {
+      "label": "长时长/多镜头叙事",
+      "keywords": ["长视频", "10秒", "十秒", "更长", "加长", "时长长", "15秒", "20秒", "30秒", "持续久", "多镜头", "叙事", "分镜", "一镜到底", "续写", "延长"]
+    },
+    "motion_transfer": {
+      "label": "动作迁移/角色替换",
+      "keywords": ["动作迁移", "动作参考", "替换人物", "换人", "角色替换", "复刻动作", "迁移动作", "跳舞动作", "animate", "把人换成"]
+    },
+    "video_edit": {
+      "label": "视频编辑/风格转换",
+      "keywords": ["编辑视频", "改视频", "风格转换", "换成风格", "去掉", "替换元素", "改成", "特效复刻", "运镜复刻", "黏土风格", "视频延长"]
+    },
+    "doc_to_video": {
+      "label": "文档/网页生视频",
+      "keywords": ["ppt", "pptx", "excel", "文档生视频", "网页生视频", "根据这个文件", "根据这个网页", "百科", "表格生视频"]
+    },
+    "offline_private": {
+      "label": "离线/隐私优先",
+      "keywords": ["离线", "本地", "不联网", "断网", "隐私", "不想上传", "保密", "本机", "免密钥", "不用key", "免费", "不花钱"]
+    }
+  },
+  "models": [
+    {
+      "id": "wan3-video",
+      "name": "通义万相 Wan 3.0（全能·原生有声）",
+      "track": "cloud",
+      "provider": "dashscope",
+      "modelId": "wan3.0-video",
+      "modelIdVerified": true,
+      "match": { "pattern": "^wan3\\.0-video$", "flags": "i" },
+      "inputs": ["t2v", "i2v", "first_last_frame", "audio", "reference", "file", "link", "video_edit"],
+      "api": {
+        "taskType": "all-in-one",
+        "resolutions": ["480P", "720P", "1080P"],
+        "defaultResolution": "1080P",
+        "ratios": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16", "adaptive"],
+        "defaultRatio": "adaptive",
+        "durationRange": [2, 30],
+        "supportsSmartDuration": true,
+        "audioByDefault": true,
+        "fps": 30,
+        "mediaTypes": ["first_frame", "last_frame", "reference_image", "reference_video", "reference_audio", "file", "link"],
+        "videoUrlValidHours": 24
+      },
+      "strengths": {
+        "audio_video": 10, "realistic": 10, "long_duration": 10, "first_last_frame": 9,
+        "portrait_motion": 9, "landscape": 9, "product_ad": 9, "doc_to_video": 10, "video_edit": 9,
+        "anime": 8
+      },
+      "quality": 10, "speed": 5, "costFactor": 1.4,
+      "maxDurationSec": 30, "resolution": "1080P",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "阿里云百炼商业服务",
+      "notes": "百炼当前最强 All-in-One：2-30秒、30fps、原生输出台词+BGM+音效，支持首尾帧、最多20个多模态参考素材、文档/网页生视频、视频编辑与延长"
+    },
+    {
+      "id": "wan3-video-prime",
+      "name": "通义万相 Wan 3.0 优速版",
+      "track": "cloud",
+      "provider": "dashscope",
+      "modelId": "wan3.0-video-prime",
+      "modelIdVerified": true,
+      "match": { "pattern": "^wan3\\.0-video-prime$", "flags": "i" },
+      "inputs": ["t2v", "i2v", "first_last_frame", "audio", "reference", "file", "link"],
+      "api": {
+        "taskType": "all-in-one",
+        "resolutions": ["480P", "720P", "1080P"],
+        "defaultResolution": "720P",
+        "ratios": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16", "adaptive"],
+        "defaultRatio": "adaptive",
+        "durationRange": [2, 30],
+        "supportsSmartDuration": true,
+        "audioByDefault": true,
+        "fps": 30,
+        "videoUrlValidHours": 24
+      },
+      "strengths": { "fast_vertical": 9, "audio_video": 9, "realistic": 9, "long_duration": 9, "product_ad": 8 },
+      "quality": 10, "speed": 8, "costFactor": 1.5,
+      "maxDurationSec": 30, "resolution": "1080P",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "阿里云百炼商业服务",
+      "notes": "与 Wan3.0 同质量但生成速度大幅提升，赶时间时首选"
+    },
+    {
+      "id": "happyhorse-1.1-t2v",
+      "name": "HappyHorse 1.1 文生视频（有声）",
+      "track": "cloud",
+      "provider": "dashscope",
+      "modelId": "happyhorse-1.1-t2v",
+      "modelIdVerified": true,
+      "match": { "pattern": "^happyhorse-1\\.1-t2v$", "flags": "i" },
+      "inputs": ["t2v"],
+      "api": {
+        "resolutions": ["480P", "720P", "1080P"],
+        "defaultResolution": "1080P",
+        "durationRange": [3, 15],
+        "audioByDefault": true,
+        "fps": 24,
+        "format": "MP4"
+      },
+      "strengths": { "audio_video": 10, "realistic": 9, "long_duration": 8 },
+      "quality": 9, "speed": 6, "costFactor": 1.2,
+      "maxDurationSec": 15, "resolution": "1080P",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "阿里云百炼商业服务",
+      "notes": "官方文档中纯文生视频的首推模型，有声、1080P、单片段最长15秒"
+    },
+    {
+      "id": "happyhorse-1.1-i2v",
+      "name": "HappyHorse 1.1 图生视频（有声）",
+      "track": "cloud",
+      "provider": "dashscope",
+      "modelId": "happyhorse-1.1-i2v",
+      "modelIdVerified": true,
+      "match": { "pattern": "^happyhorse-1\\.1-i2v$", "flags": "i" },
+      "inputs": ["i2v"],
+      "requiredInputs": ["i2v"],
+      "api": {
+        "resolutions": ["480P", "720P", "1080P"],
+        "defaultResolution": "1080P",
+        "durationRange": [3, 15],
+        "audioByDefault": true,
+        "fps": 24,
+        "format": "MP4"
+      },
+      "strengths": { "portrait_motion": 10, "audio_video": 9, "realistic": 9, "product_ad": 8 },
+      "quality": 9, "speed": 6, "costFactor": 1.2,
+      "maxDurationSec": 15, "resolution": "1080P",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "阿里云百炼商业服务",
+      "notes": "官方文档中首帧生视频的首推模型，支持音频、1080P、3-15秒"
+    },
+    {
+      "id": "happyhorse-1.1-r2v",
+      "name": "HappyHorse 1.1 参考生视频（角色一致性）",
+      "track": "cloud",
+      "provider": "dashscope",
+      "modelId": "happyhorse-1.1-r2v",
+      "modelIdVerified": true,
+      "match": { "pattern": "^happyhorse-1\\.1-r2v$", "flags": "i" },
+      "inputs": ["reference"],
+      "requiredInputs": ["reference"],
+      "api": { "resolutions": ["480P", "720P", "1080P"], "durationRange": [3, 15], "audioByDefault": true, "fps": 24 },
+      "strengths": { "portrait_motion": 9, "product_ad": 9, "realistic": 8 },
+      "quality": 9, "speed": 6, "costFactor": 1.3,
+      "maxDurationSec": 15, "resolution": "1080P",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "阿里云百炼商业服务",
+      "notes": "基于参考图片在不同场景中保持角色一致性，适合系列片/同一人物多镜头"
+    },
+    {
+      "id": "wan2.7-i2v",
+      "name": "通义万相 Wan 2.7 图生视频（首尾帧+音频驱动）",
+      "track": "cloud",
+      "provider": "dashscope",
+      "modelId": "wan2.7-i2v",
+      "modelIdVerified": true,
+      "match": { "pattern": "^wan2\\.7-i2v", "flags": "i" },
+      "inputs": ["i2v", "first_last_frame", "audio", "video_edit"],
+      "requiredInputs": ["i2v"],
+      "api": {
+        "resolutions": ["720P", "1080P"],
+        "defaultResolution": "1080P",
+        "durationRange": [2, 15],
+        "fps": 30,
+        "format": "MP4",
+        "capabilities": ["首帧", "首尾帧", "视频续写", "音频驱动"]
+      },
+      "strengths": { "first_last_frame": 10, "audio_video": 9, "portrait_motion": 9, "long_duration": 8 },
+      "quality": 9, "speed": 6, "costFactor": 1.1,
+      "maxDurationSec": 15, "resolution": "1080P",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "阿里云百炼商业服务",
+      "notes": "官方文档明确支持首帧/首尾帧/视频续写/音频驱动。注意：早先设想的 wan2.2-s2v 数字人模型在百炼当前清单中不存在，音频驱动能力实际由本模型提供"
+    },
+    {
+      "id": "wan2.7-t2v",
+      "name": "通义万相 Wan 2.7 文生视频（音频同步·多镜头）",
+      "track": "cloud",
+      "provider": "dashscope",
+      "modelId": "wan2.7-t2v",
+      "modelIdVerified": true,
+      "match": { "pattern": "^wan2\\.7-t2v", "flags": "i" },
+      "inputs": ["t2v", "audio"],
+      "api": { "resolutions": ["720P", "1080P"], "durationRange": [2, 15], "fps": 30, "capabilities": ["音频同步", "多镜头叙事"] },
+      "strengths": { "realistic": 9, "long_duration": 8, "audio_video": 8 },
+      "quality": 9, "speed": 6, "costFactor": 1.1,
+      "maxDurationSec": 15, "resolution": "1080P",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "阿里云百炼商业服务",
+      "notes": "音频同步与多镜头叙事"
+    },
+    {
+      "id": "wan2.7-videoedit",
+      "name": "通义万相 Wan 2.7 视频编辑（特效/运镜复刻）",
+      "track": "cloud",
+      "provider": "dashscope",
+      "modelId": "wan2.7-videoedit",
+      "modelIdVerified": true,
+      "match": { "pattern": "^wan2\\.7-videoedit$", "flags": "i" },
+      "inputs": ["video_edit"],
+      "requiredInputs": ["video_edit"],
+      "api": { "resolutions": ["720P", "1080P"], "durationRange": [2, 10], "fps": 30 },
+      "strengths": { "video_edit": 10, "motion_transfer": 8 },
+      "quality": 9, "speed": 6, "costFactor": 1.1,
+      "maxDurationSec": 10, "resolution": "1080P",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "阿里云百炼商业服务",
+      "notes": "指令编辑、视频迁移、特效复刻、运镜复刻"
+    },
+    {
+      "id": "wan2.2-kf2v-flash",
+      "name": "通义万相 Wan 2.2 首尾帧（快速）",
+      "track": "cloud",
+      "provider": "dashscope",
+      "modelId": "wan2.2-kf2v-flash",
+      "modelIdVerified": true,
+      "match": { "pattern": "^wan2\\.2-kf2v", "flags": "i" },
+      "inputs": ["first_last_frame", "i2v"],
+      "requiredInputs": ["first_last_frame"],
+      "api": { "resolutions": ["480P", "720P", "1080P"], "durationRange": [5, 5], "fps": 30, "audio": false },
+      "strengths": { "first_last_frame": 10, "fast_vertical": 7 },
+      "quality": 8, "speed": 8, "costFactor": 0.8,
+      "maxDurationSec": 5, "resolution": "1080P",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "阿里云百炼商业服务",
+      "notes": "首尾帧专用且成本低；无音频"
+    },
+    {
+      "id": "wan2.2-animate-move",
+      "name": "通义万相 Wan 2.2 动作迁移到静态人物",
+      "track": "cloud",
+      "provider": "dashscope",
+      "modelId": "wan2.2-animate-move",
+      "modelIdVerified": true,
+      "match": { "pattern": "^wan2\\.2-animate-move$", "flags": "i" },
+      "inputs": ["motion_transfer", "i2v"],
+      "requiredInputs": ["motion_transfer"],
+      "api": { "resolutions": ["720P"], "durationRange": [2, 30], "fps": [15, 25], "modes": ["wan-std", "wan-pro"] },
+      "strengths": { "motion_transfer": 10, "portrait_motion": 9 },
+      "quality": 9, "speed": 5, "costFactor": 1.2,
+      "maxDurationSec": 30, "resolution": "720P",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "阿里云百炼商业服务",
+      "notes": "把参考视频中的动作迁移到静态图片人物上，背景保持不变。wan-pro 更接近实拍，wan-std 更快更省"
+    },
+    {
+      "id": "wan2.2-animate-mix",
+      "name": "通义万相 Wan 2.2 视频中替换人物",
+      "track": "cloud",
+      "provider": "dashscope",
+      "modelId": "wan2.2-animate-mix",
+      "modelIdVerified": true,
+      "match": { "pattern": "^wan2\\.2-animate-mix$", "flags": "i" },
+      "inputs": ["motion_transfer", "video_edit"],
+      "requiredInputs": ["motion_transfer"],
+      "api": { "resolutions": ["720P"], "durationRange": [2, 30], "fps": [15, 25], "modes": ["wan-std", "wan-pro"] },
+      "strengths": { "motion_transfer": 10, "video_edit": 8 },
+      "quality": 9, "speed": 5, "costFactor": 1.2,
+      "maxDurationSec": 30, "resolution": "720P",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "阿里云百炼商业服务",
+      "notes": "把视频中的人物替换成图片中的人物"
+    },
+    {
+      "id": "happyhorse-1.0-video-edit",
+      "name": "HappyHorse 1.0 视频编辑（有声）",
+      "track": "cloud",
+      "provider": "dashscope",
+      "modelId": "happyhorse-1.0-video-edit",
+      "modelIdVerified": true,
+      "match": { "pattern": "^happyhorse-1\\.0-video-edit$", "flags": "i" },
+      "inputs": ["video_edit"],
+      "requiredInputs": ["video_edit"],
+      "api": { "resolutions": ["720P", "1080P"], "durationRange": [3, 15], "audioByDefault": true, "fps": 24 },
+      "strengths": { "video_edit": 9, "audio_video": 7 },
+      "quality": 8, "speed": 6, "costFactor": 1.0,
+      "maxDurationSec": 15, "resolution": "1080P",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "阿里云百炼商业服务",
+      "notes": "官方文档推荐的文本指令视频编辑模型：风格转换、元素替换，有声输出"
+    },
+    {
+      "id": "wan2.2-t2v-plus",
+      "name": "通义万相 Wan 2.2 文生视频 Plus",
+      "track": "cloud",
+      "provider": "dashscope",
+      "modelId": "wan2.2-t2v-plus",
+      "modelIdVerified": true,
+      "match": { "pattern": "^wan2\\.2-t2v-plus$", "flags": "i" },
+      "inputs": ["t2v"],
+      "api": { "resolutions": ["480P", "1080P"], "durationRange": [5, 5], "fps": 30, "audio": false },
+      "strengths": { "realistic": 8, "landscape": 8 },
+      "quality": 8, "speed": 6, "costFactor": 0.8,
+      "maxDurationSec": 5, "resolution": "1080P",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "阿里云百炼商业服务",
+      "notes": "上一代通用文生视频，无音频，成本低于 Wan3.0；适合不需要声音的场景"
+    },
+    {
+      "id": "wan2.2-i2v-flash",
+      "name": "通义万相 Wan 2.2 图生视频 Flash（快 50%）",
+      "track": "cloud",
+      "provider": "dashscope",
+      "modelId": "wan2.2-i2v-flash",
+      "modelIdVerified": true,
+      "match": { "pattern": "^wan2\\.2-i2v-flash$", "flags": "i" },
+      "inputs": ["i2v"],
+      "requiredInputs": ["i2v"],
+      "api": { "resolutions": ["480P", "720P", "1080P"], "durationRange": [5, 5], "fps": 30, "audio": false },
+      "strengths": { "fast_vertical": 9, "portrait_motion": 8, "micro_loop": 7 },
+      "quality": 7, "speed": 9, "costFactor": 0.6,
+      "maxDurationSec": 5, "resolution": "1080P",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "阿里云百炼商业服务",
+      "notes": "官方称速度比 2.1 快 50%，低成本的图片动起来方案"
+    },
+    {
+      "id": "sf-wan2.2-i2v",
+      "name": "SiliconFlow 通义万相 Wan2.2 图生视频 A14B",
+      "track": "cloud",
+      "provider": "siliconflow",
+      "modelId": "Wan-AI/Wan2.2-I2V-A14B",
+      "modelIdVerified": true,
+      "match": { "pattern": "Wan-AI/Wan2\\.2-I2V-A14B", "flags": "i" },
+      "inputs": ["i2v"],
+      "requiredInputs": ["i2v"],
+      "api": {
+        "submitPath": "/v1/video/submit",
+        "statusPath": "/v1/video/status",
+        "imageSizes": ["1280x720", "720x1280", "960x960"],
+        "defaultImageSize": "1280x720",
+        "imageAcceptsBase64": true,
+        "resultUrlValidMinutes": 60,
+        "requestIdValidMinutes": 10,
+        "autoRatioMapping": { "16:9": "1280x720", "9:16": "720x1280", "1:1": "960x960" }
+      },
+      "strengths": { "portrait_motion": 9, "realistic": 8, "product_ad": 8 },
+      "quality": 9, "speed": 6, "costFactor": 0.8,
+      "maxDurationSec": 5, "resolution": "1280x720",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "Apache-2.0（模型）/ SiliconFlow 按量计费",
+      "notes": "官方文档明确 image 字段支持 data:image/png;base64 直传，是本地图生视频的首选通道；分辨率按图片宽高比自动匹配，建议用 16:9 / 9:16 / 1:1 的图"
+    },
+    {
+      "id": "sf-wan2.2-t2v",
+      "name": "SiliconFlow 通义万相 Wan2.2 文生视频 A14B",
+      "track": "cloud",
+      "provider": "siliconflow",
+      "modelId": "Wan-AI/Wan2.2-T2V-A14B",
+      "modelIdVerified": true,
+      "match": { "pattern": "Wan-AI/Wan2\\.2-T2V-A14B", "flags": "i" },
+      "inputs": ["t2v"],
+      "api": {
+        "submitPath": "/v1/video/submit",
+        "statusPath": "/v1/video/status",
+        "imageSizes": ["1280x720", "720x1280", "960x960"],
+        "defaultImageSize": "1280x720",
+        "resultUrlValidMinutes": 60
+      },
+      "strengths": { "realistic": 8, "anime": 7, "landscape": 7 },
+      "quality": 8, "speed": 6, "costFactor": 0.8,
+      "maxDurationSec": 5, "resolution": "1280x720",
+      "requiresKey": true, "region": "cn-reachable",
+      "license": "Apache-2.0（模型）/ SiliconFlow 按量计费",
+      "notes": "百炼额度用尽时的国内备选文生视频通道"
+    },
+    {
+      "id": "hunyuanvideo-1.5",
+      "name": "混元 HunyuanVideo 1.5（海外通道）",
+      "track": "cloud",
+      "provider": "huggingface",
+      "modelIdVerified": false,
+      "match": { "pattern": "hunyuan.*video", "flags": "i" },
+      "inputs": ["t2v", "i2v"],
+      "strengths": { "landscape": 10, "realistic": 8 },
+      "quality": 9, "speed": 5, "costFactor": 1.0,
+      "maxDurationSec": 10, "resolution": "1080p",
+      "requiresKey": true, "region": "overseas-unreachable",
+      "license": "社区许可（商用条款需自查）",
+      "notes": "建筑结构与风景空镜稳定。本机实测 huggingface.co 返回 502 不可达，探测通过才会启用；模型 ID 未核对"
+    },
+    {
+      "id": "ltx-2.5-fast",
+      "name": "LTX-2.5 Fast 极速出片（海外通道）",
+      "track": "cloud",
+      "provider": "replicate",
+      "modelIdVerified": false,
+      "match": { "pattern": "ltx.*2[._-]?5.*fast|ltx-2", "flags": "i" },
+      "inputs": ["t2v", "i2v"],
+      "strengths": { "fast_vertical": 10, "portrait_motion": 7, "micro_loop": 7 },
+      "quality": 8, "speed": 10, "costFactor": 0.4,
+      "maxDurationSec": 20, "resolution": "720p",
+      "requiresKey": true, "region": "overseas-unreachable",
+      "license": "Apache-2.0",
+      "notes": "竖版人像与快速预览；海外通道本机实测不可达，模型 ID 未核对"
+    },
+    {
+      "id": "local-ltx-2b-fp8",
+      "name": "本地 LTX-Video 2B v0.9.1（FP8·免密钥离线）",
+      "track": "local",
+      "provider": "local",
+      "inputs": ["t2v", "i2v"],
+      "strengths": { "offline_private": 10, "fast_vertical": 8, "micro_loop": 7, "product_ad": 6, "portrait_motion": 6, "anime": 6 },
+      "quality": 6, "speed": 7, "costFactor": 0.0,
+      "maxDurationSec": 5, "resolution": "480p",
+      "vramGB": 6.5, "ramGB": 10, "downloadGB": 5.32,
+      "requiresKey": false, "region": "local",
+      "license": "Apache-2.0",
+      "weights": {
+        "repo": "Lightricks/LTX-Video",
+        "file": "ltx-video-2b-v0.9.1.safetensors",
+        "sizeGB": 5.32,
+        "source": "modelscope"
+      },
+      "notes": "8GB 显存下的最优本地选择：实测权重 5.32GB，FP8 后约 6.5GB 显存，出片最快"
+    },
+    {
+      "id": "local-wan2.1-1.3b-fp8",
+      "name": "本地 Wan2.1-T2V-1.3B（FP8·免密钥离线）",
+      "track": "local",
+      "provider": "local",
+      "inputs": ["t2v"],
+      "strengths": { "offline_private": 9, "realistic": 7, "landscape": 6 },
+      "quality": 7, "speed": 4, "costFactor": 0.0,
+      "maxDurationSec": 5, "resolution": "480p",
+      "vramGB": 7.5, "ramGB": 14, "downloadGB": 16.37,
+      "requiresKey": false, "region": "local",
+      "license": "Apache-2.0",
+      "weights": {
+        "repo": "Wan-AI/Wan2.1-T2V-1.3B",
+        "file": "diffusion_pytorch_model.safetensors",
+        "sizeGB": 5.29,
+        "extraFiles": [
+          { "file": "Wan2.1_VAE.pth", "sizeGB": 0.47 },
+          { "file": "models_t5_umt5-xxl-enc-bf16.pth", "sizeGB": 10.58 }
+        ],
+        "source": "modelscope"
+      },
+      "warning": "FP16 需 8.19GB 显存，8GB 卡必须 FP8/NF4 量化；T5 编码器单文件 10.58GB，本机内存 15.2GB 非常吃紧，建议关闭其他应用",
+      "notes": "同尺寸质量最强，但内存风险高，默认不作首选"
+    },
+    {
+      "id": "local-cogvideox-2b",
+      "name": "本地 CogVideoX-2b（免密钥离线）",
+      "track": "local",
+      "provider": "local",
+      "inputs": ["t2v"],
+      "strengths": { "offline_private": 8, "anime": 7 },
+      "quality": 6, "speed": 4, "costFactor": 0.0,
+      "maxDurationSec": 6, "resolution": "480p",
+      "vramGB": 7.8, "ramGB": 13, "downloadGB": 12.83,
+      "requiresKey": false, "region": "local",
+      "license": "Apache-2.0",
+      "weights": {
+        "repo": "ZhipuAI/CogVideoX-2b",
+        "file": "transformer/diffusion_pytorch_model.safetensors",
+        "sizeGB": 3.15,
+        "extraFiles": [
+          { "file": "text_encoder/model-00001-of-00002.safetensors", "sizeGB": 4.65 },
+          { "file": "text_encoder/model-00002-of-00002.safetensors", "sizeGB": 4.22 },
+          { "file": "vae/diffusion_pytorch_model.safetensors", "sizeGB": 0.8 }
+        ],
+        "source": "modelscope"
+      },
+      "warning": "8GB 显存下的精确耗时未实测获取，列为第三选",
+      "notes": "中文提示词遵循好，动漫风格"
+    },
+    {
+      "id": "mock-selftest",
+      "name": "自检模式（Mock）",
+      "track": "mock",
+      "provider": "mock",
+      "inputs": ["t2v", "i2v"],
+      "strengths": {},
+      "quality": 1, "speed": 10, "costFactor": 0.0,
+      "maxDurationSec": 5, "resolution": "480p",
+      "requiresKey": false, "region": "local",
+      "license": "MIT",
+      "notes": "无 Key、无本地模型时的全链路自检通道，用 ffmpeg 真实合成带水印的样例视频，界面明确标注「自检模式」，不是真实 AI 生成结果"
+    }
+  ]
+}
