@@ -22,7 +22,9 @@ const { UpdateManager } = require('./updater.js');
 const { MockProvider } = require('./providers/mock.js');
 const { DashScopeProvider } = require('./providers/dashscope.js');
 const { SiliconFlowProvider } = require('./providers/siliconflow.js');
+const { LocalProvider } = require('./providers/local.js');
 const ffmpegMod = require('./ffmpeg.js');
+const runtimeMod = require('./local-runtime.js');
 
 const pkg = require('../../package.json');
 
@@ -68,6 +70,10 @@ function initRuntime() {
     outputDir: PATHS.outputDir,
     emit: forwardTaskProgress,
     getApiKey: () => secretStore.getKey('siliconflow')
+  }));
+  providers.set('local', new LocalProvider({
+    paths: PATHS,
+    emit: forwardTaskProgress
   }));
 
   orchestrator = new Orchestrator({
@@ -117,14 +123,13 @@ function buildProviderStatus() {
   return status;
 }
 
-/** 已安装的本地模型：检查权重文件是否真的在 */
+/** 已安装的本地模型：用运行时管理器的统一判定，检查全部权重文件（含子目录）是否真的都在 */
 function listInstalledLocalModels() {
   const installed = [];
   const cat = currentCatalog();
   for (const m of cat.models) {
     if (m.track !== 'local' || !m.weights) continue;
-    const f = path.join(PATHS.modelsDir, m.id, path.basename(m.weights.file));
-    if (fs.existsSync(f)) installed.push(m.id);
+    if (runtimeMod.isModelInstalled(m, PATHS)) installed.push(m.id);
   }
   return installed;
 }
@@ -208,6 +213,56 @@ function registerIpc() {
     const r = await catalogMod.refresh({ paths: PATHS });
     if (r.updated) { cachedCatalog = r.catalog; orchestrator.catalog = r.catalog; }
     return { updated: r.updated, source: r.source, message: r.message };
+  });
+
+  // 本地模型（B 轨）：列出 + 安装状态 + 硬件就绪评估
+  ipcMain.handle('local:list', () => {
+    const cat = currentCatalog();
+    const hw = hwCache || null;
+    return cat.models.filter(m => m.track === 'local').map(m => ({
+      id: m.id,
+      name: m.name,
+      license: m.license,
+      notes: m.notes,
+      warning: m.warning || null,
+      vramGB: m.vramGB,
+      ramGB: m.ramGB,
+      downloadGB: m.downloadGB,
+      resolution: m.resolution,
+      maxDurationSec: m.maxDurationSec,
+      installed: runtimeMod.isModelInstalled(m, PATHS),
+      readiness: hw ? hardware.assessLocalReadiness(hw, m, 20) : null
+    }));
+  });
+
+  // 安装计划预检（不下载）：返回体积、来源、磁盘/显存是否够
+  ipcMain.handle('local:plan', (_e, modelId) => {
+    const model = currentCatalog().models.find(m => m.id === modelId);
+    if (!model) return { ok: false, error: `未知本地模型: ${modelId}` };
+    const plan = runtimeMod.buildInstallPlan({ model, paths: PATHS, hardware: hwCache });
+    return {
+      ok: true,
+      modelId: plan.modelId,
+      modelName: plan.modelName,
+      totalDownloadGB: plan.totalDownloadGB,
+      requiredDiskGB: plan.requiredDiskGB,
+      readiness: plan.readiness,
+      warning: plan.warning,
+      itemCount: plan.items.length
+    };
+  });
+
+  // 执行安装：下载 Python 运行时 + torch + 权重（约 9GB，耗时较长），进度经事件推送
+  ipcMain.handle('local:install', async (_e, modelId) => {
+    const model = currentCatalog().models.find(m => m.id === modelId);
+    if (!model) return { ok: false, error: `未知本地模型: ${modelId}` };
+    if (!hwCache) hwCache = await hardware.detect({ diskProbePath: PATHS.outputDir }).catch(() => null);
+    const plan = runtimeMod.buildInstallPlan({ model, paths: PATHS, hardware: hwCache });
+    return await runtimeMod.runInstallPlan({
+      plan,
+      paths: PATHS,
+      onProgress: (p) => sendToRenderer('local:progress', { modelId, ...p })
+    });
   });
 
   // 路由预演（不真正生成）

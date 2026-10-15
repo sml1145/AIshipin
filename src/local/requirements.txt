@@ -1,0 +1,10 @@
+# 幻想时刻 本地推理（B 轨）Python 依赖
+# 注意：torch 需按 CUDA 版本单独装（见 local-runtime.js 用 --index-url https://download.pytorch.org/whl/cu124）
+# 这里只列纯 Python 依赖，torch/torchvision 由运行时管理器单独安装以匹配 CUDA。
+diffusers==0.32.1
+transformers==4.47.1
+accelerate==1.2.1
+safetensors==0.4.5
+sentencepiece==0.2.0
+imageio==2.36.1
+imageio-ffmpeg==0.5.1

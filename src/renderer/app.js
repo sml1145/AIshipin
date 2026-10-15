@@ -85,6 +85,7 @@ const state = {
   secrets: {},
   config: {},
   attachedImages: [],   // 本地图片绝对路径
+  currentTaskId: null,  // 当前进行中的任务 id，用于取消
   taskNodes: new Map(), // taskId → {bubble, progressFill, progressText, attemptsEl, videoSlot}
   history: []
 };
@@ -218,6 +219,10 @@ async function handleSend() {
 }
 
 function finishTask(nodes, result) {
+  // 任务收口：复位取消按钮与当前任务 id
+  const cancelBtn = $('#btnCancel');
+  if (cancelBtn) { cancelBtn.style.display = 'none'; cancelBtn.disabled = false; cancelBtn.textContent = '取消'; }
+  state.currentTaskId = null;
   renderAttempts(nodes.attemptsEl, result.attempts);
   if (result.ok && result.result) {
     nodes.progressFill.style.width = '100%';
@@ -310,9 +315,15 @@ $('#chkOffline').addEventListener('change', previewCurrentRoute);
 /* ============ 任务进度事件 ============ */
 
 hxsk.on('task:progress', (payload) => {
-  // 简化：进度事件用于未来多任务并发；当前单任务已在 finishTask 收口
-  if (payload && payload.status === 'running' && payload.message) {
-    // 找到最后一条助手消息的进度文本更新
+  if (!payload) return;
+  // 捕获新建任务的 id，使取消按钮在长任务期间可用
+  if (payload.event === 'created' && payload.id) {
+    state.currentTaskId = payload.id;
+    $('#btnCancel').style.display = '';
+    $('#btnCancel').disabled = false;
+    return;
+  }
+  if (payload.status === 'running' && payload.message) {
     const nodes = lastTaskNodes();
     if (nodes) {
       if (typeof payload.progress === 'number') nodes.progressFill.style.width = payload.progress + '%';
@@ -323,14 +334,21 @@ hxsk.on('task:progress', (payload) => {
 let _lastNodes = null;
 function lastTaskNodes() { return _lastNodes; }
 
+// 取消当前生成任务
+$('#btnCancel').addEventListener('click', async () => {
+  if (!state.currentTaskId) return;
+  $('#btnCancel').disabled = true;
+  $('#btnCancel').textContent = '取消中…';
+  try { await hxsk.cancelGenerate(state.currentTaskId); toast('已请求取消', 'ok'); }
+  catch (e) { toast('取消失败：' + (e.message || e), 'err'); }
+});
+
 /* ============ 本地模型 ============ */
 
 async function renderLocalModels() {
   const body = $('#localBody');
   body.innerHTML = '';
-  const cat = state.catalog || await hxsk.getCatalog();
   const hw = state.hardware || await hxsk.detectHardware();
-  const localModels = cat.models.filter(m => m.track === 'local');
 
   const intro = el('p', 'muted', '本地模型免密钥、完全离线、数据不出本机。首次使用需下载运行时与权重（约 9GB，需 ≥20GB 磁盘空闲）。受 8GB 显存限制，出片约 480p / 5 秒，单条数分钟，质量低于云端。');
   body.appendChild(intro);
@@ -338,25 +356,87 @@ async function renderLocalModels() {
   const hwLine = el('p', 'muted', `本机：${hw.gpu || '未探测到 GPU'} · 显存 ${hw.vramGB}GB · 内存 ${hw.totalRamGB}GB · 磁盘空闲 ${hw.diskFreeGB}GB`);
   body.appendChild(hwLine);
 
-  for (const m of localModels) {
+  let models = [];
+  try { models = await hxsk.listLocalModels(); }
+  catch (e) { body.appendChild(el('p', 'warn', '加载本地模型清单失败：' + (e.message || e))); return; }
+
+  for (const m of models) {
     const card = el('div', 'model-card');
     const h = el('h3');
     h.textContent = m.name;
-    const installed = false; // 由主进程 listInstalledLocalModels 判断，这里展示元信息
+    if (m.installed) h.appendChild(el('span', 'badge installed', '已安装'));
     card.appendChild(h);
+
     const meta = el('div', 'meta');
     meta.innerHTML = renderMarkdown(
-      `显存需求 ${m.vramGB}GB · 内存需求 ${m.ramGB}GB · 下载约 ${m.downloadGB}GB\n许可 ${m.license}\n${m.notes || ''}`
+      `显存需求 ${m.vramGB}GB · 内存需求 ${m.ramGB}GB · 下载约 ${m.downloadGB}GB\n许可 ${m.license}\n分辨率 ${m.resolution || '—'} · 最长 ${m.maxDurationSec || '—'} 秒\n${m.notes || ''}`
     );
     card.appendChild(meta);
     if (m.warning) card.appendChild(el('div', 'warn', '⚠️ ' + m.warning));
+
+    // 硬件就绪评估：跑不动就直接说明原因，不给"下载"按钮误导用户
+    if (m.readiness && !m.readiness.canInstall) {
+      const rd = el('div', 'warn', '本机不满足：' + m.readiness.problems.join('；'));
+      card.appendChild(rd);
+    } else if (m.readiness && m.readiness.warnings && m.readiness.warnings.length) {
+      card.appendChild(el('div', 'muted', '提示：' + m.readiness.warnings.join('；')));
+    }
+
     const actions = el('div', 'actions');
-    const btn = el('button', 'primary-btn', '下载并安装');
-    btn.addEventListener('click', () => toast('本地模型下载将在 v1.0 后续构建接入（当前版本可先用云端或自检模式）', 'err'));
-    actions.appendChild(btn);
+    const progressText = el('span', 'muted', '');
+    actions.appendChild(progressText);
+
+    if (m.installed) {
+      const useBtn = el('button', 'ghost-btn', '用它生成（离线）');
+      useBtn.addEventListener('click', () => {
+        switchView('chat');
+        $('#chkOffline').checked = true;
+        $('#promptInput').focus();
+        previewCurrentRoute();
+        toast('已切到离线模式，输入描述后生成将用本地模型', 'ok');
+      });
+      actions.appendChild(useBtn);
+    } else {
+      const btn = el('button', 'primary-btn', '下载并安装');
+      const canInstall = !m.readiness || m.readiness.canInstall;
+      if (!canInstall) { btn.disabled = true; btn.title = '本机硬件不满足，无法安装'; }
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.textContent = '安装中…';
+        progressText.textContent = '正在准备安装…';
+        // 订阅该模型的安装进度
+        const off = hxsk.on('local:progress', (p) => {
+          if (p.modelId !== m.id) return;
+          progressText.textContent = `${p.phase === 'python' ? '运行时' : p.phase === 'pip' ? '依赖' : '权重'}：${p.message || ''}${p.percent != null ? ' ' + p.percent + '%' : ''}`;
+        });
+        try {
+          const r = await hxsk.installLocalModel(m.id);
+          if (r.ok) { toast(`${m.name} 安装完成`, 'ok'); renderLocalModels(); updateTrackBadge(); }
+          else { toast('安装失败：' + (r.error || '未知原因'), 'err'); progressText.textContent = r.error || '安装失败'; }
+        } catch (e) {
+          toast('安装异常：' + (e.message || e), 'err');
+          progressText.textContent = String(e.message || e);
+        } finally {
+          off();
+          btn.disabled = false;
+          btn.textContent = '下载并安装';
+        }
+      });
+      actions.appendChild(btn);
+    }
     card.appendChild(actions);
     body.appendChild(card);
   }
+}
+
+/** 切换到指定视图（供本地模型页跳转对话用） */
+function switchView(name) {
+  document.querySelectorAll('.nav-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.view === name);
+  });
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  const target = $(`#view-${name}`);
+  if (target) target.classList.add('active');
 }
 
 /* ============ 任务记录 ============ */

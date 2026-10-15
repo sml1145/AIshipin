@@ -13,8 +13,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 /** 允许渲染层订阅的事件通道（白名单） */
-const ALLOWED_EVENTS = ['task:progress', 'update:state', 'update:rollback', 'hardware:ready'];
-
+const ALLOWED_EVENTS = ['task:progress', 'update:state', 'update:rollback', 'hardware:ready', 'local:progress'];
 const api = {
   // 应用信息
   getAppInfo: () => ipcRenderer.invoke('app:info'),
@@ -33,6 +32,11 @@ const api = {
   submitGenerate: (req) => ipcRenderer.invoke('generate:submit', req),
   cancelGenerate: (taskId) => ipcRenderer.invoke('generate:cancel', taskId),
   getTask: (taskId) => ipcRenderer.invoke('generate:task', taskId),
+
+  // 本地模型（B 轨：免密钥离线生成）
+  listLocalModels: () => ipcRenderer.invoke('local:list'),
+  planLocalInstall: (modelId) => ipcRenderer.invoke('local:plan', modelId),
+  installLocalModel: (modelId) => ipcRenderer.invoke('local:install', modelId),
 
   // 图片选择（只回传路径，不回传文件内容）
   pickImage: () => ipcRenderer.invoke('dialog:pickImage'),

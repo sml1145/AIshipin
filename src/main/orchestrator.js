@@ -123,6 +123,8 @@ class Orchestrator {
       id: taskId, status: TASK_STATUS.PENDING, progress: 0,
       prompt: req.prompt || '', createdAt: Date.now(), attempts: []
     });
+    // 立即通知界面 taskId，使"取消"在长任务开始后即可用（submit 要 await 到结束才返回）
+    this._emit(taskId, { event: 'created', id: taskId });
 
     const context = this._buildRouteContext(req);
     const routeResult = routerCore.route({ prompt: req.prompt || '', catalog: this.catalog, context });

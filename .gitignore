@@ -23,6 +23,11 @@ secrets.bin
 # 图标中间产物（保留 build/icon.ico 与 icon-src.png 供打包使用）
 build/ico-stages/
 
+# Python 编译缓存（本地推理脚本运行时产生）
+__pycache__/
+*.pyc
+.venv-test/
+
 # 系统文件
 .DS_Store
 Thumbs.db
