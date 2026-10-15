@@ -14,6 +14,28 @@ const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_RETRIES = 2;
 const RETRY_DELAY_MS = 1500;
 
+/**
+ * 默认 fetch 实现：
+ *   在 Electron 主进程中优先使用 net.fetch —— 它走 Chromium 网络栈，
+ *   使用操作系统证书存储与系统代理。
+ *
+ *   为什么必须这样（本机实测教训）：某些企业/远程网络存在 TLS 拦截，
+ *   其根证书只存在于 Windows 证书存储，而 Node 原生 fetch(undici) 使用自带
+ *   CA 束，会报 UNABLE_TO_VERIFY_LEAF / fetch failed；gh 与 PowerShell 却正常。
+ *   若沿用原生 fetch，软件在这类网络上所有云端调用与更新都会失败。
+ *   非 Electron 环境（单元测试）回退到 globalThis.fetch。
+ */
+function getDefaultFetch() {
+  try {
+    // eslint-disable-next-line global-require
+    const { net } = require('electron');
+    if (net && typeof net.fetch === 'function' && process.type === 'browser') {
+      return (url, init) => net.fetch(url, init);
+    }
+  } catch { /* 非 Electron 环境 */ }
+  return globalThis.fetch;
+}
+
 /** 判断 HTTP 状态码是否值得重试 */
 function isRetryableStatus(status) {
   return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599);
@@ -74,7 +96,7 @@ async function httpRequest(opts) {
     onRetry = null
   } = opts;
 
-  const doFetch = fetchImpl || globalThis.fetch;
+  const doFetch = fetchImpl || getDefaultFetch();
   if (!doFetch) throw new Error('当前运行时不支持 fetch（需要 Node 18+ 或 Electron 主进程）');
 
   const finalHeaders = { ...headers };
@@ -205,5 +227,6 @@ module.exports = {
   getJson,
   probeEndpoint,
   fileToDataUrl,
-  headersToObject
+  headersToObject,
+  getDefaultFetch
 };

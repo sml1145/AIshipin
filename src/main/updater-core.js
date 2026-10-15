@@ -242,7 +242,7 @@ async function probeLatest(opts) {
   if (!Array.isArray(channels) || channels.length === 0) {
     return { ok: false, attempts: [], error: '未配置任何更新通道' };
   }
-  const doFetch = fetchImpl || globalThis.fetch;
+  const doFetch = fetchImpl || require('./http.js').getDefaultFetch();
   if (!doFetch) return { ok: false, attempts: [], error: '当前运行时不支持 fetch' };
 
   const attempts = [];

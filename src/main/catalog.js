@@ -84,7 +84,10 @@ function load({ catalogBundled, catalogCached }) {
  * @returns {Promise<{ok:boolean, catalog?:object, url?:string, error?:string}>}
  */
 async function fetchRemote({ urls, localSchemaVersion = 0, fetchImpl, timeoutMs = DEFAULT_TIMEOUT_MS }) {
-  const doFetch = fetchImpl || globalThis.fetch;
+  let doFetch = fetchImpl;
+  if (!doFetch) {
+    try { doFetch = require('./http.js').getDefaultFetch(); } catch { doFetch = globalThis.fetch; }
+  }
   if (!doFetch) {
     return { ok: false, error: '当前运行时不支持 fetch' };
   }

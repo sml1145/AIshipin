@@ -70,7 +70,7 @@ async function downloadFile(opts) {
     timeoutMs = DEFAULT_CHUNK_TIMEOUT_MS
   } = opts;
 
-  const doFetch = fetchImpl || globalThis.fetch;
+  const doFetch = fetchImpl || require('./http.js').getDefaultFetch();
   if (!doFetch) throw new Error('当前运行时不支持 fetch');
 
   fs.mkdirSync(path.dirname(destPath), { recursive: true });

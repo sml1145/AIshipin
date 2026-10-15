@@ -243,12 +243,17 @@ test('探测竞速：onChannel 回调逐通道上报结果，供 UI 展示每条
   assert.ok(seen.some(s => s.ok === false));
 });
 
-test('探测竞速：无通道配置或无 fetch 时给出明确错误', async () => {
+test('探测竞速：无通道配置或网络全失败时给出明确错误', async () => {
   const r1 = await up.probeLatest({ channels: [], fetchImpl: async () => ({}) });
   assert.equal(r1.ok, false);
   assert.ok(r1.error.includes('未配置'));
-  const r2 = await up.probeLatest({ channels: up.buildProbeChannels(), fetchImpl: null });
+  // 注入一个必然失败的网络实现，验证全部通道失败时的错误路径（不依赖真实网络）
+  const r2 = await up.probeLatest({
+    channels: up.buildProbeChannels(),
+    fetchImpl: async () => { throw new Error('network unreachable'); }
+  });
   assert.equal(r2.ok, false);
+  assert.ok(r2.error.includes('network unreachable'));
 });
 
 /* ============ 阶段2：版本比对 ============ */

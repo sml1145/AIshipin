@@ -27,3 +27,6 @@ build/ico-stages/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 探测结果
+netfetch-probe.json
