@@ -1,8 +1,8 @@
 {
   "name": "huanxiang-shike",
   "productName": "幻想时刻",
-  "version": "1.1.0",
-  "displayVersion": "1.1",
+  "version": "1.2.0",
+  "displayVersion": "1.2",
   "description": "幻想时刻 — 对话式 AI 视频生成桌面软件（云端接口 + 本地免密钥双轨生成，智能模型路由，多通道自动更新）",
   "author": "sml1145",
   "license": "MIT",
@@ -15,11 +15,15 @@
     "test": "node --test \"tests/*.test.mjs\"",
     "bump": "node scripts/bump-version.mjs",
     "icon": "node scripts/gen-icon.mjs",
-    "smoke": "node scripts/run-smoke.mjs"
+    "smoke": "node scripts/run-smoke.mjs",
+    "sign": "node scripts/sign-release.mjs",
+    "sign:check": "node scripts/sign-release.mjs --check",
+    "check-ipc": "node scripts/check-ipc-contract.mjs"
   },
   "devDependencies": {
     "electron": "44.7.2",
     "electron-builder": "26.15.3",
+    "playwright-core": "1.64.1",
     "png-to-ico": "3.0.2"
   },
   "dependencies": {

@@ -2,7 +2,7 @@
 
 对话式 AI 视频生成桌面软件。上传图片 + 文字描述即可生成视频；智能模型路由自动挑选最合适的模型；应用内多通道并行检测更新。
 
-**当前版本：1.0**
+**当前版本：1.2**
 
 ## 功能
 
@@ -13,13 +13,15 @@
 - **智能路由**：识别 14 类意图（人像动态 / 有声视频 / 写实 / 动漫 / 风景空镜 / 产品广告 / 微动效循环 / 极速竖版 / 首尾帧 / 长时长 / 动作迁移 / 视频编辑 / 文档生视频 / 离线隐私），按「意图命中 × 通道可达 × 显存/额度可行性 × 成本」打分选型，失败自动沿降级链切换，决策理由全程可见
 - **多模型搭配**：分镜模式下多模型各出一段，自动拼接成片（内置 ffmpeg）
 - **多通道并行更新**：GitHub API / Releases HTML / Tags 三通道探测竞速，下载三通道竞速，SHA512 完整性校验，静默升级免 UAC，失败给手动下载直链
+- **更新清单 Ed25519 验签（v1.2）**：`latest.yml` 由发布者私钥签名、客户端用内置公钥验签，**验签不通过一律拒绝自动更新**（fail-closed）。因为更新走多通道竞速且含用户自定义镜像，恶意镜像可能同时提供被篡改的安装包 + 匹配的 SHA512，只有私钥签名能防住
+- **本地推理自检（v1.2）**：「本地模型」页一键自检，**无需下载 9GB 权重**即可验证 Python 运行时/依赖/CUDA/推理链路是否就绪，并如实报告"差什么"，不伪造结果
 - **自检模式**：无 Key 无本地模型时，用 ffmpeg 真实合成带水印样例视频跑通全链路，界面明确标注「非真实 AI 生成」
 
 ## 下载与安装
 
 见 [Releases](https://github.com/sml1145/AIshipin/releases)。下载 `HuanXiangShiKe-Setup-x.y.0.exe`，并可用同目录 `SHA256SUMS.txt` 独立核验哈希。
 
-> 安装包未做代码签名，首次运行 Windows SmartScreen 可能提示风险，请选择「仍要运行」。更新完整性由 latest.yml 的 SHA512 + Ed25519 manifest 校验保证，不依赖代码签名。
+> 安装包未做代码签名，首次运行 Windows SmartScreen 可能提示风险，请选择「仍要运行」。更新完整性由 `latest.yml` 的 SHA512 校验 + **Ed25519 签名验签**双重保证，不依赖代码签名。
 
 安装位置为 `%LOCALAPPDATA%\Programs\幻想时刻`（per-user），升级不弹管理员框。
 
@@ -47,28 +49,38 @@
 
 - `package.json` 的 `version` 为合法 semver 三段（如 `1.0.0`）
 - 界面与 Release tag 显示两段（如 `1.0`）
-- 每次优化发布新版本：先 `npm run bump`，再 `npm run dist`，最后 `gh release create v<新两段版本>` 上传安装包 + latest.yml + SHA256SUMS.txt
+- 每次优化发布新版本：`npm run bump` → `npm run dist` → `npm run sign`（对 latest.yml 做 Ed25519 签名）→ `gh release create v<新两段版本>` 上传安装包 + latest.yml + **latest.yml.sig** + SHA256SUMS.txt
+
+> 签名私钥在仓库外保管（约定路径 `<项目同级>/HuanXiangShiKe-signing/update-private.pem`，或用环境变量 `HXSK_SIGNING_KEY` 指定），**绝不入仓**。公钥已内置于 `src/main/update-pubkey.js`，可公开。发布前务必 `npm run sign`，否则客户端会因 fail-closed 拒绝自动更新。
 
 ## 开发
 
 ```bash
 npm install          # 安装依赖
-npm test             # 无头全量单元测试（205+ 项，真实断言，含真实 ffmpeg 合成视频）
+npm test             # 无头全量单元测试（306 项，真实断言，含真实 ffmpeg 合成视频 + 真实 Python 推理协议 + Edge 渲染界面 E2E）
+npm run check-ipc    # IPC 契约静态检查：渲染层⊆preload⊆主进程，接口错配在构建前拦截
 npm start            # 开发态启动（需交互式桌面会话）
 npm run smoke        # GUI 冒烟自检（窗口/沙箱/核心 IPC），结果写 smoke-result.json
 npm run dist         # 打包 Windows 安装包到 release/
+npm run sign         # 对 latest.yml 做 Ed25519 签名，产出 latest.yml.sig
+npm run sign:check   # 校验现有签名是否有效
 ```
 
 ### 环境说明（重要）
 
-在无交互桌面会话的环境（如部分远程桌面/虚拟显示环境）中，Chromium 渲染提交可能无法完成，窗口会卡在加载。这是**环境限制而非软件缺陷**：同机 Edge 正常、Electron 33/44 均复现、无崩溃无注入无代理干扰。请在正常桌面会话运行 `npm run smoke` 或安装后启动验证；全部业务逻辑均可通过 `npm test` 无头验证。
+在含 **IDD 虚拟显示适配器**（ToDesk / MuMu / GameViewer 等远程桌面或模拟器驱动）的会话中，Chromium 的 `CollectDriverInfoD3D()` 可能选中虚拟适配器，导致 GPU 进程断言崩溃（`STATUS_BREAKPOINT 0x80000003`）、页面永远无法提交渲染——这是**环境限制而非软件缺陷**（参见 [electron#54552](https://github.com/electron/electron/issues/54552)）。实测证据：同机 Edge 正常、Electron 33/44 均复现、无注入无代理干扰、`--disable-gpu`/swiftshader/offscreen 等 8 组开关均无效。
+
+应对：软件内置**渲染看门狗**，检测到页面迟迟未渲染会写出 `logs/render-failure.json`（自动识别并点名虚拟显示适配器）并弹可读提示。根治办法是在物理显示器的本地会话运行，或在设备管理器临时禁用上述虚拟显示适配器。
+
+正因如此，界面代码的正确性改由 **Edge 渲染代理做 E2E 验证**（`tests/gui-e2e.test.mjs`，17 项，含 XSS 转义），业务逻辑由无头测试覆盖——两者都可在无桌面会话的 CI 中运行。
 
 ## 能力边界（如实说明）
 
 - 真实生成需自备 API Key；无 Key 且未装本地模型时仅自检模式
 - 海外模型通道（Hugging Face / Replicate / fal.ai）在部分网络下不可达，仅保留接口位并自动探测启用
 - 本地轨受显存限制：8GB 显存约 480p / 5 秒 / 单条数分钟；LTXV-13B、HunyuanVideo 13B、Mochi 10B、Wan2.2-A14B 在 8GB 显存下跑不动
-- ModelScope 的视频生成端点官方文档未获取，v1.0 不将其作为视频通道（不编造端点）
+- 本地轨真实 GPU 出片需 CUDA + 已下载权重；「本地推理自检」只验证链路是否就绪，其 dry-run 产物一定标注为占位视频，**绝不冒充真实生成**
+- ModelScope 的视频生成端点官方文档未获取，本版不将其作为视频通道（不编造端点）
 - 不含账号体系、不含支付、不含模型微调训练
 
 ## License

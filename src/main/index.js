@@ -16,7 +16,7 @@ const fs = require('node:fs');
 const pathsMod = require('./paths.js');
 const catalogMod = require('./catalog.js');
 const hardware = require('./hardware.js');
-const { SecretStore } = require('./secrets.js');
+const { SecretStore, SECRET_KINDS, getProviderMeta, getKeyApplyUrl } = require('./secrets.js');
 const { Orchestrator } = require('./orchestrator.js');
 const { UpdateManager } = require('./updater.js');
 const { MockProvider } = require('./providers/mock.js');
@@ -25,8 +25,27 @@ const { SiliconFlowProvider } = require('./providers/siliconflow.js');
 const { LocalProvider } = require('./providers/local.js');
 const ffmpegMod = require('./ffmpeg.js');
 const runtimeMod = require('./local-runtime.js');
+const renderCompat = require('./render-compat.js');
+const selfCheckMod = require('./local-selfcheck.js');
 
 const pkg = require('../../package.json');
+
+/* ============ 启动开关（必须在 app.whenReady 之前 appendSwitch 才生效）============
+ *
+ * 背景（本机实测 + electron#54552）：
+ *   在含 IDD 虚拟显示适配器（ToDesk / MuMu / GameViewer 等远程桌面/模拟器）的会话里，
+ *   Chromium 的 CollectDriverInfoD3D() 可能选中虚拟适配器，导致 GPU 进程断言崩溃
+ *   （STATUS_BREAKPOINT 0x80000003），页面永远无法提交渲染（did-finish-load 不触发）。
+ *
+ * 诚实说明：实测 --disable-gpu / swiftshader / no-zygote / offscreen 等 8 组开关在真实
+ *   IDD 环境下均无效；根本解法是在物理显示会话运行、或在设备管理器禁用这些虚拟显示适配器。
+ *   这里注入一组"尽力而为"的兼容性开关（对部分环境可能有效），并提供环境变量
+ *   HXSK_GPU_FLAGS 让受影响用户自行追加尝试，但**不承诺一定能修复**。
+ *   渲染是否真的成功由下方 createWindow 里的看门狗检测并给出可读诊断。
+ */
+for (const sw of renderCompat.collectGpuSwitches(process.env.HXSK_GPU_FLAGS)) {
+  try { app.commandLine.appendSwitch(sw.name, sw.value); } catch { /* 忽略 */ }
+}
 
 /** 单实例锁：避免多开导致更新与端口冲突 */
 const gotLock = app.requestSingleInstanceLock();
@@ -172,6 +191,48 @@ function createWindow() {
   mainWindow.removeMenu();
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
+  // 渲染看门狗：IDD 虚拟显示环境下页面可能永不提交渲染（did-finish-load 不触发）。
+  // 检测到这种情况就写详细诊断日志并弹可读提示，明确指向根因，而不是让用户对着白屏干等。
+  let rendered = false;
+  const renderStart = Date.now();
+  mainWindow.webContents.once('did-finish-load', () => { rendered = true; });
+  const watchdogMs = Number(process.env.HXSK_RENDER_WATCHDOG_MS) || renderCompat.DEFAULT_WATCHDOG_MS;
+  setTimeout(async () => {
+    if (rendered || !mainWindow || mainWindow.isDestroyed()) return;
+    // 适配器名从后台预热的硬件探测结果取（含 IDD 虚拟适配器）。
+    // 竞态兜底：若后台探测尚未完成（displayAdapters 为空），这里同步补探测一次，
+    // 否则诊断会漏判 IDD（实测：看门狗先于后台 detect 触发时 iddDetected 会假阴性）。
+    let adapters = (hwCache && Array.isArray(hwCache.displayAdapters) && hwCache.displayAdapters.length)
+      ? hwCache.displayAdapters
+      : [];
+    if (adapters.length === 0) {
+      try {
+        const fresh = await hardware.detect({ diskProbePath: PATHS.outputDir });
+        if (fresh) {
+          hwCache = hwCache || fresh;
+          adapters = Array.isArray(fresh.displayAdapters) ? fresh.displayAdapters : [];
+        }
+      } catch { /* 探测失败不阻断诊断，退化为通用文案 */ }
+    }
+    if (adapters.length === 0 && hwCache && hwCache.gpu) adapters = [hwCache.gpu];
+    const diag = renderCompat.buildRenderFailureDiagnosis({
+      elapsedMs: Date.now() - renderStart,
+      watchdogMs,
+      versions: { electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
+      gpuFlagsEnv: process.env.HXSK_GPU_FLAGS || '',
+      adapters,
+      logsDir: PATHS.logsDir
+    });
+    const logPath = path.join(PATHS.logsDir, 'render-failure.json');
+    try {
+      fs.mkdirSync(PATHS.logsDir, { recursive: true });
+      fs.writeFileSync(logPath, JSON.stringify(diag, null, 2), 'utf8');
+    } catch { /* 写日志失败不阻断提示 */ }
+    // 冒烟测试模式：不弹阻塞式对话框（否则无头自动化会卡住），仅靠日志与退出码
+    if (process.env.HXSK_SMOKE_TEST === '1') return;
+    dialog.showErrorBox('幻想时刻 · 界面未能渲染', renderCompat.formatDialogText(diag, logPath));
+  }, watchdogMs);
+
   // 外链一律交给系统浏览器，不在应用内打开，避免钓鱼与任意导航
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
@@ -265,6 +326,31 @@ function registerIpc() {
     });
   });
 
+  // 本地轨道自检：环境探针 + dry-run 链路，如实报告"哪些就绪、还差什么"
+  // 不需 GPU/权重即可验证 Provider↔Python 协议链路；真实 GPU 出片就绪与否单独判定
+  ipcMain.handle('local:selfcheck', async (_e, modelId) => {
+    const localProvider = providers.get('local');
+    if (!localProvider) return { ok: false, error: '本地 Provider 未初始化' };
+    const pythonPath = localProvider._resolvePython();
+    if (!pythonPath) {
+      return {
+        ok: false,
+        summary: '未找到可用的 Python 运行时',
+        problems: ['未找到 Python 运行时：请先在「本地模型」页下载并安装运行时'],
+        warnings: [], gpuReady: false, dryRunReady: false, dryRunOk: false,
+        env: null, dryRun: null
+      };
+    }
+    const model = modelId ? currentCatalog().models.find(m => m.id === modelId) : null;
+    const result = await selfCheckMod.runLocalSelfCheck({
+      paths: PATHS,
+      pythonPath,
+      LocalProvider: localProvider.constructor,
+      model: model || null
+    });
+    return { ok: true, pythonPath, ...result };
+  });
+
   // 路由预演（不真正生成）
   ipcMain.handle('route:preview', (_e, req) => orchestrator.preview(normalizeReq(req)));
 
@@ -292,6 +378,33 @@ function registerIpc() {
   ipcMain.handle('secret:list', () => secretStore.listConfiguredKinds());
   ipcMain.handle('secret:set', (_e, kind, value) => secretStore.setKey(kind, value));
   ipcMain.handle('secret:clear', (_e, kind) => secretStore.clearKey(kind));
+
+  // 各云端通道的申请引导（去哪弄 Key、免费额度、是否本机可达）——只读展示信息，不含密钥
+  ipcMain.handle('secret:providers', () => {
+    const configured = secretStore.listConfiguredKinds().configured || {};
+    return SECRET_KINDS.map(kind => {
+      const meta = getProviderMeta(kind) || {};
+      return {
+        kind,
+        label: meta.label || kind,
+        keyName: meta.keyName || null,
+        applyUrl: meta.applyUrl || null,
+        linkVerified: meta.verified === true,
+        reachableRegion: meta.reachableRegion || 'unknown',
+        freeQuota: meta.freeQuota || null,
+        note: meta.note || null,
+        configured: Boolean(configured[kind])
+      };
+    });
+  });
+
+  // 打开某通道的 Key 申请页：只打开代码内固定的官方 URL，绝不接受渲染层传入的任意地址（防钓鱼）
+  ipcMain.handle('secret:openKeyPage', (_e, kind) => {
+    const url = getKeyApplyUrl(kind);
+    if (!url) return { ok: false, error: `未知通道或缺少官方链接: ${kind}` };
+    shell.openExternal(url);
+    return { ok: true, url };
+  });
 
   // 配置
   ipcMain.handle('config:get', () => secretStore.loadConfig());

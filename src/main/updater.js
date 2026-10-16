@@ -8,7 +8,9 @@
  * Windows 下的硬约束：
  *   - 运行中的 exe 无法被原地覆盖，必须由外部安装器接管 → 下载后 spawn installer /S
  *   - per-user 安装（%LOCALAPPDATA%\Programs\幻想时刻）→ 静默升级不需要管理员权限
- *   - 安装包未做代码签名 → 必须用 latest.yml 里的 SHA512 校验完整性，防中间人替换
+ *   - 安装包未做代码签名 → 用 latest.yml 的 SHA512 校验完整性 + Ed25519 验签防篡改。
+ *     Ed25519 尤其重要：多通道竞速下载含用户自定义镜像，恶意镜像可能同时提供
+ *     被篡改的包 + 匹配的 SHA512，只有私钥签名的清单能防住这种攻击。
  *
  * 安全要点：spawn 安装器时用参数数组，绝不拼接 shell 命令字符串（路径含中文/空格会出事）
  */
@@ -21,6 +23,8 @@ const { spawn } = require('node:child_process');
 const core = require('./updater-core.js');
 const { downloadFile, raceDownload, sha512File, sha256File } = require('./downloader.js');
 const { httpRequest } = require('./http.js');
+const { verifyManifest, normalizeManifest } = require('./update-verify.js');
+const { UPDATE_MANIFEST_PUBLIC_KEY, MANIFEST_SIGNATURE_FILENAME } = require('./update-pubkey.js');
 
 /** 更新流程的各个阶段，UI 按此展示进度 */
 const PHASE = Object.freeze({
@@ -45,6 +49,7 @@ class UpdateManager {
    * @param {string[]} [opts.extraMirrors] 用户自定义镜像
    * @param {object} [opts.electronApp] Electron app 对象（用于 quitAndInstall）
    * @param {Function} [opts.spawnImpl] 注入以便测试
+   * @param {string} [opts.manifestPublicKey] 验签公钥（默认用随包内置公钥；仅公钥可注入，私钥绝不可注入）
    */
   constructor(opts = {}) {
     this.paths = opts.paths;
@@ -54,6 +59,7 @@ class UpdateManager {
     this.extraMirrors = opts.extraMirrors || [];
     this.app = opts.electronApp || null;
     this.spawnImpl = opts.spawnImpl || spawn;
+    this.manifestPublicKey = opts.manifestPublicKey || UPDATE_MANIFEST_PUBLIC_KEY;
     this.state = { phase: PHASE.IDLE };
     /** 防止并发触发多次检查 */
     this._busy = false;
@@ -160,18 +166,37 @@ class UpdateManager {
     fs.mkdirSync(this.downloadDir, { recursive: true });
     const destPath = path.join(this.downloadDir, assetName);
 
-    // 先取 latest.yml 拿官方 SHA512（未签名安装包必须靠它防篡改）
-    this._set({ phase: PHASE.VERIFYING, message: '正在获取校验信息 latest.yml…' });
-    const manifest = await this._fetchManifest(release);
+    // 先取 latest.yml 并做 Ed25519 验签（验签通过才信任其中的 SHA512）
+    this._set({ phase: PHASE.VERIFYING, message: '正在获取并验签校验清单 latest.yml…' });
+    const manifestRes = await this._fetchManifest(release);
+    const manifest = manifestRes.parsed;
+
+    // 验签闸门（fail-closed）：签名缺失或无效一律拒绝自动更新。
+    // 理由：多通道竞速含用户自定义镜像，恶意镜像可能同时提供被篡改的安装包 + 匹配的 SHA512，
+    // 只有发布者私钥签名的清单能防住；缺签名时无法确认来源，宁可拒绝也不放行。
+    if (!manifestRes.signatureValid) {
+      const result = {
+        ok: false, phase: PHASE.FAILED,
+        message: manifestRes.signaturePresent
+          ? 'Ed25519 验签失败：更新清单可能被篡改，已拒绝此次自动更新。'
+          : '缺少 Ed25519 签名清单（latest.yml.sig），无法验证更新来源，已拒绝此次自动更新。',
+        detail: manifestRes.signaturePresent ? '签名与清单内容不匹配' : '未在 Release 中找到 latest.yml.sig',
+        suggestion: '为安全起见不会自动安装未通过验签的更新。可从官方 Releases 页面手动下载，并自行核对 SHA256SUMS.txt。',
+        manualUrl: release.htmlUrl || `https://github.com/${core.REPO_OWNER}/${core.REPO_NAME}/releases/latest`
+      };
+      this._set(result);
+      return result;
+    }
+
     const expectedSha512 = manifest && manifest.sha512 ? manifest.sha512 : null;
     const expectedBytes = manifest && manifest.files && manifest.files[0] ? manifest.files[0].size : null;
 
     this._set({
       phase: PHASE.DOWNLOADING,
       message: expectedSha512
-        ? `正在并行下载 ${assetName}（将做 SHA512 校验）…`
+        ? `正在并行下载 ${assetName}（清单已验签，将做 SHA512 校验）…`
         : `正在并行下载 ${assetName}…`,
-      assetName, expectedSha512: !!expectedSha512
+      assetName, expectedSha512: !!expectedSha512, manifestSigned: true
     });
 
     const sources = core.buildDownloadChannels({
@@ -234,6 +259,8 @@ class UpdateManager {
       bytes: dl.bytes,
       sha256,
       sha512Verified: Boolean(expectedSha512),
+      // 能走到这里说明 Ed25519 验签已通过（闸门在前，未通过已提前 return）
+      manifestSigned: manifestRes.signatureValid === true,
       winnerChannel: dl.winner,
       current: d.current, latest: d.latest
     };
@@ -242,25 +269,43 @@ class UpdateManager {
     return result;
   }
 
-  /** 取 latest.yml 并解析；拿不到就返回 null（降级为只校验大小） */
+  /**
+   * 取 latest.yml 并做 Ed25519 验签。
+   * @returns {Promise<{parsed:object|null, signatureValid:boolean, signaturePresent:boolean, raw:string|null}>}
+   *   signatureValid=false 时调用方必须拒绝信任该清单（防篡改的核心关口）。
+   */
   async _fetchManifest(release) {
-    const candidates = [];
+    const base = `https://github.com/${core.REPO_OWNER}/${core.REPO_NAME}/releases/download/${encodeURIComponent(release.tag)}`;
     const manifestAsset = (release.assets || []).find(a => a.isManifest);
+    const candidates = [];
     if (manifestAsset && manifestAsset.downloadUrl) candidates.push(manifestAsset.downloadUrl);
-    candidates.push(`https://github.com/${core.REPO_OWNER}/${core.REPO_NAME}/releases/download/${encodeURIComponent(release.tag)}/latest.yml`);
+    candidates.push(`${base}/latest.yml`);
 
+    // 1. 取清单原文
+    let raw = null;
     for (const url of candidates) {
       try {
-        const res = await httpRequest({
-          url, timeoutMs: 15000, retries: 1, fetchImpl: this.fetchImpl
-        });
-        if (res.ok && res.text) {
-          const parsed = core.parseLatestYml(res.text);
-          return parsed;
-        }
+        const res = await httpRequest({ url, timeoutMs: 15000, retries: 1, fetchImpl: this.fetchImpl });
+        if (res.ok && res.text) { raw = res.text; break; }
       } catch { /* 换下一个候选 */ }
     }
-    return null;
+    if (raw == null) return { parsed: null, signatureValid: false, signaturePresent: false, raw: null };
+
+    // 2. 取签名（与 latest.yml 并列的 latest.yml.sig）
+    let sig = null;
+    try {
+      const sigRes = await httpRequest({ url: `${base}/${MANIFEST_SIGNATURE_FILENAME}`, timeoutMs: 15000, retries: 1, fetchImpl: this.fetchImpl });
+      if (sigRes.ok && sigRes.text) sig = sigRes.text.trim();
+    } catch { /* 签名缺失由下面判定 */ }
+
+    // 3. 验签：对规范化后的清单原文验签（消除 CRLF/LF 差异）
+    const normalized = normalizeManifest(raw);
+    const signaturePresent = Boolean(sig);
+    const signatureValid = signaturePresent && verifyManifest(normalized, sig, this.manifestPublicKey);
+
+    let parsed = null;
+    try { parsed = core.parseLatestYml(raw); } catch { parsed = null; }
+    return { parsed, signatureValid, signaturePresent, raw: normalized };
   }
 
   /**

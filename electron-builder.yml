@@ -35,8 +35,11 @@ win:
     - target: nsis
       arch:
         - x64
-  # 本次未购买代码签名证书；更新完整性改由 Ed25519 manifest 签名 + SHA512 保证
-  signAndEditExecutable: false
+  icon: build/icon.ico
+  # 未购买代码签名证书。注意必须用 signExecutable:false 而非 signAndEditExecutable:false——
+  # 后者会连带跳过图标与版本元数据写入（app-builder-lib winPackager.js 明确提示），
+  # 导致 exe 无图标。signExecutable:false 只跳过签名，保留图标/元数据。
+  signExecutable: false
 
 nsis:
   oneClick: false

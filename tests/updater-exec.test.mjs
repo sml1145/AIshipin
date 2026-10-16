@@ -11,8 +11,18 @@ const require = createRequire(import.meta.url);
 const { UpdateManager, PHASE, summarizeChannels } = require('../src/main/updater.js');
 const up = require('../src/main/updater-core.js');
 const pathsMod = require('../src/main/paths.js');
+const { generateKeyPair, signManifest, normalizeManifest } = require('../src/main/update-verify.js');
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+// 测试专用密钥对：私钥只在测试进程内存中，绝不落盘、绝不入仓、绝不与生产公钥混用。
+// 每个 UpdateManager 实例注入 testKeys.publicKeyBase64，验签才可能通过。
+const testKeys = generateKeyPair();
+
+/** 对 latest.yml 文本用测试私钥签名（验签模块要求对规范化文本签名） */
+function signYml(ymlText) {
+  return signManifest(normalizeManifest(ymlText), testKeys.privateKeyPem);
+}
 
 function tmp(prefix) {
   return mkdtempSync(join(tmpdir(), `hxsk-upd-${prefix}-`));
@@ -44,10 +54,13 @@ function latestYml(version = '1.1.0') {
 }
 
 /**
- * 假 fetch：能应答 API 探测、latest.yml、以及安装包二进制下载
+ * 假 fetch：能应答 API 探测、latest.yml、latest.yml.sig、以及安装包二进制下载
+ * @param {object} o
+ * @param {'valid'|'tampered'|'missing'} [o.sigMode] 签名模式：valid=合法签名，tampered=签名与清单不符，missing=不提供签名
  */
-function fullFakeFetch({ version = '1.1', yml = null, installerBytes = INSTALLER_BYTES, failDownload = false, apiFail = false } = {}) {
+function fullFakeFetch({ version = '1.1', yml = null, installerBytes = INSTALLER_BYTES, failDownload = false, apiFail = false, sigMode = 'valid' } = {}) {
   const recorder = [];
+  const ymlText = yml !== null ? yml : latestYml(`${version}.0`);
   const impl = async (url, opts = {}) => {
     recorder.push({ url, opts });
     if (url.includes('api.github.com/repos/sml1145/AIshipin/releases/latest')) {
@@ -71,8 +84,16 @@ function fullFakeFetch({ version = '1.1', yml = null, installerBytes = INSTALLER
     if (url.includes('/tags')) {
       return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify([{ name: `v${version}` }]) };
     }
+    // 注意：.sig 必须在 latest.yml 之前判断，否则会被 includes('latest.yml') 误匹配
+    if (url.includes('latest.yml.sig')) {
+      if (sigMode === 'missing') return { ok: false, status: 404, headers: { get: () => null }, text: async () => '' };
+      const sig = sigMode === 'tampered'
+        ? signYml(ymlText + '\n# 被篡改的内容')   // 签名对应的是另一份清单 → 验签必失败
+        : signYml(ymlText);
+      return { ok: true, status: 200, headers: { get: () => null }, text: async () => sig };
+    }
     if (url.includes('latest.yml')) {
-      return { ok: true, status: 200, headers: { get: () => null }, text: async () => (yml !== null ? yml : latestYml(`${version}.0`)) };
+      return { ok: true, status: 200, headers: { get: () => null }, text: async () => ymlText };
     }
     // 安装包下载
     if (failDownload) throw new Error('network down during download');
@@ -85,11 +106,17 @@ function fullFakeFetch({ version = '1.1', yml = null, installerBytes = INSTALLER
   return { impl, recorder };
 }
 
+/** 构造注入了测试公钥的 UpdateManager（否则验签必失败） */
+function makeManager(opts = {}) {
+  const merged = { manifestPublicKey: testKeys.publicKeyBase64, ...opts };
+  return new UpdateManager(merged);
+}
+
 /* ============ 检查更新 ============ */
 
 test('检查更新：发现新版本时返回 needUpdate 并附通道汇总', async () => {
   const f = fullFakeFetch({ version: '1.1' });
-  const m = new UpdateManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
   const r = await m.check();
   assert.equal(r.ok, true);
   assert.equal(r.needUpdate, true);
@@ -101,7 +128,7 @@ test('检查更新：发现新版本时返回 needUpdate 并附通道汇总', as
 
 test('检查更新：已是最新时明确告知且不下载', async () => {
   const f = fullFakeFetch({ version: '1.0' });
-  const m = new UpdateManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
   const r = await m.check();
   assert.equal(r.needUpdate, false);
   assert.equal(r.phase, PHASE.NO_UPDATE);
@@ -110,7 +137,7 @@ test('检查更新：已是最新时明确告知且不下载', async () => {
 
 test('检查更新关键：1.9→2.0 判定为需要更新（十进制进位）', async () => {
   const f = fullFakeFetch({ version: '2.0' });
-  const m = new UpdateManager({ paths: makePaths(), currentVersion: '1.9.0', fetchImpl: f.impl });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.9.0', fetchImpl: f.impl });
   const r = await m.check();
   assert.equal(r.needUpdate, true);
   assert.equal(r.current, '1.9');
@@ -119,7 +146,7 @@ test('检查更新关键：1.9→2.0 判定为需要更新（十进制进位）'
 
 test('检查更新：全部通道失败时给出手动下载地址，不假装成功', async () => {
   const f = { impl: async () => { throw new Error('ENOTFOUND'); } };
-  const m = new UpdateManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
   const r = await m.check();
   assert.equal(r.ok, false);
   assert.equal(r.phase, PHASE.FAILED);
@@ -129,7 +156,7 @@ test('检查更新：全部通道失败时给出手动下载地址，不假装�
 
 test('检查更新：并发触发被拦截，不会重复探测', async () => {
   const f = fullFakeFetch({ version: '1.1' });
-  const m = new UpdateManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
   const p1 = m.check();
   const p2 = m.check(); // 立即第二次
   const r2 = await p2;
@@ -141,7 +168,7 @@ test('检查更新：并发触发被拦截，不会重复探测', async () => {
 test('检查更新：onState 逐阶段回调，UI 能展示探测进度', async () => {
   const f = fullFakeFetch({ version: '1.1' });
   const phases = [];
-  const m = new UpdateManager({
+  const m = makeManager({
     paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl,
     onState: (s) => phases.push(s.phase)
   });
@@ -154,7 +181,7 @@ test('检查更新：onState 逐阶段回调，UI 能展示探测进度', async 
 
 test('下载更新：SHA512 校验通过并给出安装包路径', async () => {
   const f = fullFakeFetch({ version: '1.1' });
-  const m = new UpdateManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
   const r = await m.check({ downloadIfNew: true });
   assert.equal(r.ok, true);
   assert.equal(r.phase, PHASE.READY_TO_INSTALL);
@@ -169,7 +196,7 @@ test('下载更新关键：SHA512 不符必须删除文件并拒绝安装', asyn
   // 下载到的内容被篡改，与 latest.yml 里的 sha512 不符
   const tampered = Buffer.from('TAMPERED-MALICIOUS-INSTALLER');
   const f = fullFakeFetch({ version: '1.1', installerBytes: tampered });
-  const m = new UpdateManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
   const r = await m.check({ downloadIfNew: true });
   assert.equal(r.ok, false);
   assert.equal(r.phase, PHASE.FAILED);
@@ -183,7 +210,7 @@ test('下载更新关键：SHA512 不符必须删除文件并拒绝安装', asyn
 
 test('下载更新：下载全部失败时给出手动下载直链', async () => {
   const f = fullFakeFetch({ version: '1.1', failDownload: true });
-  const m = new UpdateManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
   const r = await m.check({ downloadIfNew: true });
   assert.equal(r.ok, false);
   assert.equal(r.phase, PHASE.FAILED);
@@ -191,20 +218,44 @@ test('下载更新：下载全部失败时给出手动下载直链', async () =>
   assert.ok(r.message.includes('下载通道均失败'));
 });
 
-test('下载更新：latest.yml 缺失时仍能下载，但标注未做 SHA512 校验', async () => {
-  // manifest 取不到（返回空 yml 触发解析失败）→ 降级为只校验大小
-  const f = fullFakeFetch({ version: '1.1', yml: 'garbage-not-yaml' });
-  const m = new UpdateManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
+test('下载更新关键：缺少 Ed25519 签名清单时拒绝自动更新（fail-closed）', async () => {
+  const f = fullFakeFetch({ version: '1.1', sigMode: 'missing' });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
   const r = await m.check({ downloadIfNew: true });
-  assert.equal(r.ok, true);
-  assert.equal(r.sha512Verified, false, '没有 manifest 就必须如实标注未校验');
-  assert.ok(existsSync(r.installerPath));
+  assert.equal(r.ok, false, '缺签名必须拒绝，不得放行');
+  assert.equal(r.phase, PHASE.FAILED);
+  assert.ok(r.message.includes('签名') || r.message.includes('Ed25519'), '应说明因缺签名而拒绝: ' + r.message);
+  assert.ok(r.manualUrl, '应给出手动下载出口');
+  // 绝不能下载落盘任何安装包
+  assert.ok(!existsSync(join(m.downloadDir, 'HuanXiangShiKe-Setup-1.1.0.exe')), '拒绝时不应留下安装包');
+  rmSync(m.downloadDir, { recursive: true, force: true });
+});
+
+test('下载更新关键：Ed25519 签名与清单不符（被篡改）时拒绝自动更新', async () => {
+  // sigMode:'tampered' 让签名对应的是另一份清单内容，与真实 latest.yml 不匹配
+  const f = fullFakeFetch({ version: '1.1', sigMode: 'tampered' });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
+  const r = await m.check({ downloadIfNew: true });
+  assert.equal(r.ok, false, '验签失败必须拒绝');
+  assert.equal(r.phase, PHASE.FAILED);
+  assert.ok(r.message.includes('验签失败') || r.message.includes('篡改'), '应说明验签失败: ' + r.message);
+  assert.ok(!existsSync(join(m.downloadDir, 'HuanXiangShiKe-Setup-1.1.0.exe')), '验签失败不应留下安装包');
+  rmSync(m.downloadDir, { recursive: true, force: true });
+});
+
+test('下载更新：验签通过后正常下载并做 SHA512 校验', async () => {
+  const f = fullFakeFetch({ version: '1.1', sigMode: 'valid' });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
+  const r = await m.check({ downloadIfNew: true });
+  assert.equal(r.ok, true, '合法签名应放行');
+  assert.equal(r.manifestSigned, true, '应标注清单已验签');
+  assert.equal(r.sha512Verified, true);
   rmSync(m.downloadDir, { recursive: true, force: true });
 });
 
 test('下载更新：多通道竞速，记录胜出通道', async () => {
   const f = fullFakeFetch({ version: '1.1' });
-  const m = new UpdateManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl });
   const r = await m.check({ downloadIfNew: true });
   assert.equal(r.ok, true);
   assert.ok(r.winnerChannel, '应记录哪个通道下载成功');
@@ -221,7 +272,7 @@ test('安装关键：用参数数组 spawn 安装器，绝不拼接 shell 命令
     return { unref: () => {} };
   };
   const fakeApp = { getPath: () => 'C:\\Users\\me\\AppData\\Local\\Programs\\幻想时刻\\幻想时刻.exe', quit: () => {} };
-  const m = new UpdateManager({
+  const m = makeManager({
     paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl,
     spawnImpl: fakeSpawn, electronApp: fakeApp
   });
@@ -241,7 +292,7 @@ test('安装关键：用参数数组 spawn 安装器，绝不拼接 shell 命令
 });
 
 test('安装：安装包不存在时明确报错，不静默失败', async () => {
-  const m = new UpdateManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: async () => { throw new Error('x'); } });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: async () => { throw new Error('x'); } });
   const r = await m.install({ installerPath: join(tmp('nope'), 'missing.exe') });
   assert.equal(r.ok, false);
   assert.ok(r.message.includes('安装包不存在'));
@@ -250,7 +301,7 @@ test('安装：安装包不存在时明确报错，不静默失败', async () =>
 test('安装：spawn 抛错时给出可手动运行的安装包路径', async () => {
   const f = fullFakeFetch({ version: '1.1' });
   const fakeSpawn = () => { throw new Error('EACCES permission denied'); };
-  const m = new UpdateManager({
+  const m = makeManager({
     paths: makePaths(), currentVersion: '1.0.0', fetchImpl: f.impl,
     spawnImpl: fakeSpawn, electronApp: { getPath: () => 'C:\\x\\app.exe', quit: () => {} }
   });
@@ -266,7 +317,7 @@ test('安装：记录升级尝试，供下次启动做回滚判定', async () =>
   const f = fullFakeFetch({ version: '1.1' });
   const paths = makePaths();
   pathsMod.ensureDirs(paths);
-  const m = new UpdateManager({
+  const m = makeManager({
     paths, currentVersion: '1.0.0', fetchImpl: f.impl,
     spawnImpl: () => ({ unref: () => {} }), electronApp: { getPath: () => 'C:\\x\\app.exe', quit: () => {} }
   });
@@ -286,7 +337,7 @@ test('回滚判定：升级成功（版本已变）后清理记录并报告升�
   writeFileSync(join(paths.userData, 'last-update-attempt.json'), JSON.stringify({
     fromVersion: '1.0.0', toVersion: '1.1', installerPath: 'C:\\x.exe', at: new Date().toISOString()
   }));
-  const m = new UpdateManager({ paths, currentVersion: '1.1.0', fetchImpl: async () => { throw new Error('x'); } });
+  const m = makeManager({ paths, currentVersion: '1.1.0', fetchImpl: async () => { throw new Error('x'); } });
   const r = m.checkRollbackOnStartup();
   assert.equal(r.needed, false);
   assert.equal(r.upgradedFrom, '1.0.0');
@@ -300,7 +351,7 @@ test('回滚判定：升级未完成（版本没变）时提示用户', () => {
   writeFileSync(join(paths.userData, 'last-update-attempt.json'), JSON.stringify({
     fromVersion: '1.0.0', toVersion: '1.1', installerPath: 'C:\\gone.exe', at: new Date().toISOString()
   }));
-  const m = new UpdateManager({ paths, currentVersion: '1.0.0', fetchImpl: async () => { throw new Error('x'); } });
+  const m = makeManager({ paths, currentVersion: '1.0.0', fetchImpl: async () => { throw new Error('x'); } });
   const r = m.checkRollbackOnStartup();
   assert.equal(r.needed, true);
   assert.equal(r.toVersion, '1.1');
@@ -309,7 +360,7 @@ test('回滚判定：升级未完成（版本没变）时提示用户', () => {
 });
 
 test('回滚判定：无记录时静默通过', () => {
-  const m = new UpdateManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: async () => { throw new Error('x'); } });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: async () => { throw new Error('x'); } });
   assert.equal(m.checkRollbackOnStartup().needed, false);
 });
 
@@ -317,7 +368,7 @@ test('回滚判定：记录损坏时不崩，给出警告', () => {
   const paths = makePaths();
   pathsMod.ensureDirs(paths);
   writeFileSync(join(paths.userData, 'last-update-attempt.json'), '{ broken json');
-  const m = new UpdateManager({ paths, currentVersion: '1.0.0', fetchImpl: async () => { throw new Error('x'); } });
+  const m = makeManager({ paths, currentVersion: '1.0.0', fetchImpl: async () => { throw new Error('x'); } });
   const r = m.checkRollbackOnStartup();
   assert.equal(r.needed, false);
   assert.ok(r.warning.includes('损坏'));
@@ -336,6 +387,6 @@ test('通道汇总：把探测结果整理成人话', () => {
 });
 
 test('手动下载地址指向目标仓库 Releases', () => {
-  const m = new UpdateManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: async () => { throw new Error('x'); } });
+  const m = makeManager({ paths: makePaths(), currentVersion: '1.0.0', fetchImpl: async () => { throw new Error('x'); } });
   assert.equal(m.getManualDownloadUrl(), 'https://github.com/sml1145/AIshipin/releases/latest');
 });

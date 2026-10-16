@@ -37,6 +37,7 @@ const api = {
   listLocalModels: () => ipcRenderer.invoke('local:list'),
   planLocalInstall: (modelId) => ipcRenderer.invoke('local:plan', modelId),
   installLocalModel: (modelId) => ipcRenderer.invoke('local:install', modelId),
+  runLocalSelfCheck: (modelId) => ipcRenderer.invoke('local:selfcheck', modelId),
 
   // 图片选择（只回传路径，不回传文件内容）
   pickImage: () => ipcRenderer.invoke('dialog:pickImage'),
@@ -45,6 +46,9 @@ const api = {
   listSecrets: () => ipcRenderer.invoke('secret:list'),
   setSecret: (kind, value) => ipcRenderer.invoke('secret:set', kind, value),
   clearSecret: (kind) => ipcRenderer.invoke('secret:clear', kind),
+  // 通道申请引导：获取各通道 Key 申请信息 / 打开官方申请页（URL 由主进程按 kind 决定，不接受任意 URL）
+  listProviders: () => ipcRenderer.invoke('secret:providers'),
+  openKeyPage: (kind) => ipcRenderer.invoke('secret:openKeyPage', kind),
 
   // 配置
   getConfig: () => ipcRenderer.invoke('config:get'),

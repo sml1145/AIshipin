@@ -356,6 +356,60 @@ async function renderLocalModels() {
   const hwLine = el('p', 'muted', `本机：${hw.gpu || '未探测到 GPU'} · 显存 ${hw.vramGB}GB · 内存 ${hw.totalRamGB}GB · 磁盘空闲 ${hw.diskFreeGB}GB`);
   body.appendChild(hwLine);
 
+  // 本地轨道自检：不下载权重即可验证 Provider↔Python 链路，并如实报告 GPU 出片就绪状态
+  const scCard = el('div', 'model-card selfcheck-card');
+  const scTitle = el('h3', null, '本地推理自检');
+  scCard.appendChild(scTitle);
+  scCard.appendChild(el('div', 'meta', '无需下载权重即可验证本地推理链路是否通畅（用占位视频跑完整协议）。GPU 真实出片是否就绪会单独如实报告，不会伪造结果。'));
+  const scActions = el('div', 'actions');
+  const scBtn = el('button', 'primary-btn', '运行自检');
+  const scOut = el('div', 'meta sc-out');
+  scOut.style.marginTop = '10px';
+  scBtn.addEventListener('click', async () => {
+    scBtn.disabled = true;
+    scBtn.textContent = '自检中…';
+    scOut.textContent = '正在检查 Python 运行时、依赖、CUDA 与推理链路…';
+    try {
+      const r = await hxsk.runLocalSelfCheck();
+      scOut.innerHTML = '';
+      if (!r || r.ok === false) {
+        scOut.appendChild(el('div', 'warn', '✗ ' + ((r && (r.summary || r.error)) || '自检失败')));
+        for (const p of (r && r.problems) || []) scOut.appendChild(el('div', 'muted', '· ' + p));
+      } else {
+        const badge = el('div');
+        badge.appendChild(el('span', r.dryRunOk ? 'kstate on' : 'kstate off', r.dryRunOk ? '✓ dry-run 链路通过' : '✗ dry-run 链路失败'));
+        badge.appendChild(el('span', r.gpuReady ? 'kstate on' : 'kstate off', r.gpuReady ? '✓ GPU 出片就绪' : '· GPU 出片未就绪'));
+        badge.style.display = 'flex';
+        badge.style.gap = '14px';
+        scOut.appendChild(badge);
+        scOut.appendChild(el('div', 'muted', r.summary || ''));
+        if (r.dryRun && r.dryRun.result && r.dryRun.result.localPath) {
+          const vrow = el('div');
+          vrow.style.marginTop = '8px';
+          const v = document.createElement('video');
+          v.src = fileUrl(r.dryRun.result.localPath);
+          v.controls = true;
+          v.style.maxWidth = '260px';
+          vrow.appendChild(v);
+          scOut.appendChild(vrow);
+          scOut.appendChild(el('div', 'selftest-tag', '⚠️ 上方为自检占位视频（ffmpeg 合成），用于证明本地推理链路通畅，非真实 AI 生成结果。'));
+        }
+        for (const p of r.problems || []) scOut.appendChild(el('div', 'warn', '· ' + p));
+        for (const w of r.warnings || []) scOut.appendChild(el('div', 'muted', '· 提示：' + w));
+      }
+    } catch (e) {
+      scOut.innerHTML = '';
+      scOut.appendChild(el('div', 'warn', '自检异常：' + (e.message || e)));
+    } finally {
+      scBtn.disabled = false;
+      scBtn.textContent = '运行自检';
+    }
+  });
+  scActions.appendChild(scBtn);
+  scCard.appendChild(scActions);
+  scCard.appendChild(scOut);
+  body.appendChild(scCard);
+
   let models = [];
   try { models = await hxsk.listLocalModels(); }
   catch (e) { body.appendChild(el('p', 'warn', '加载本地模型清单失败：' + (e.message || e))); return; }
@@ -462,11 +516,6 @@ function renderTasks() {
 
 /* ============ 设置 ============ */
 
-const SECRET_LABELS = {
-  dashscope: '阿里云百炼', siliconflow: 'SiliconFlow', modelscope: 'ModelScope',
-  huggingface: 'Hugging Face', replicate: 'Replicate', fal: 'fal.ai'
-};
-
 async function renderSettings() {
   state.config = await hxsk.getConfig();
   state.secrets = (await hxsk.listSecrets()).configured || {};
@@ -474,33 +523,68 @@ async function renderSettings() {
   $('#cfgMirrors').value = (state.config.extraMirrors || []).join('\n');
   $('#cfgAutoUpdate').checked = state.config.autoCheckUpdate !== false;
 
+  let providers = [];
+  try { providers = await hxsk.listProviders(); }
+  catch (e) { providers = []; }
+
   const body = $('#keysBody');
   body.innerHTML = '';
-  for (const kind of Object.keys(SECRET_LABELS)) {
+
+  const REGION_HINT = {
+    cn: { text: '国内可达', cls: 'on' },
+    overseas: { text: '海外·本机实测不可达', cls: 'off' },
+    unknown: { text: '可达性未知', cls: 'off' }
+  };
+
+  for (const p of providers) {
+    const wrap = el('div', 'key-block');
+
+    // 第一行：名称 + 状态 + 可达性徽标
     const row = el('div', 'key-row');
-    row.appendChild(el('div', 'kname', SECRET_LABELS[kind]));
-    const stateEl = el('span', 'kstate ' + (state.secrets[kind] ? 'on' : 'off'), state.secrets[kind] ? '已配置' : '未配置');
-    row.appendChild(stateEl);
+    const nameBox = el('div', 'kname');
+    nameBox.textContent = p.label;
+    row.appendChild(nameBox);
+    row.appendChild(el('span', 'kstate ' + (p.configured ? 'on' : 'off'), p.configured ? '已配置' : '未配置'));
+    const region = REGION_HINT[p.reachableRegion] || REGION_HINT.unknown;
+    row.appendChild(el('span', 'kstate ' + region.cls, region.text));
+
     const input = document.createElement('input');
     input.type = 'password';
-    input.placeholder = state.secrets[kind] ? '已保存（留空则不修改）' : '粘贴 API Key';
+    input.placeholder = p.configured ? '已保存（留空则不修改）' : `粘贴 ${p.keyName || 'API Key'}`;
     row.appendChild(input);
+
     const saveBtn = el('button', 'ghost-btn', '保存');
     saveBtn.addEventListener('click', async () => {
       const v = input.value.trim();
       if (!v) { toast('未输入密钥', 'err'); return; }
-      try { await hxsk.setSecret(kind, v); input.value = ''; toast(`${SECRET_LABELS[kind]} 密钥已加密保存`, 'ok'); renderSettings(); updateTrackBadge(); }
+      try { await hxsk.setSecret(p.kind, v); input.value = ''; toast(`${p.label} 密钥已加密保存`, 'ok'); renderSettings(); updateTrackBadge(); }
       catch (e) { toast('保存失败：' + (e.message || e), 'err'); }
     });
     row.appendChild(saveBtn);
-    if (state.secrets[kind]) {
+
+    if (p.configured) {
       const clearBtn = el('button', 'ghost-btn', '清除');
       clearBtn.addEventListener('click', async () => {
-        await hxsk.clearSecret(kind); toast('已清除', 'ok'); renderSettings(); updateTrackBadge();
+        await hxsk.clearSecret(p.kind); toast('已清除', 'ok'); renderSettings(); updateTrackBadge();
       });
       row.appendChild(clearBtn);
     }
-    body.appendChild(row);
+    wrap.appendChild(row);
+
+    // 第二行：申请引导（去哪弄 Key + 免费额度 + 说明）
+    const guide = el('div', 'key-guide');
+    if (p.applyUrl) {
+      const link = el('a', 'key-link', p.linkVerified ? '→ 去哪申请 Key' : '→ 打开官网申请');
+      link.href = '#';
+      link.title = p.linkVerified ? p.applyUrl : (p.applyUrl + '（链接未逐一核实，登录后自行找 API Key / Tokens 入口）');
+      link.addEventListener('click', (e) => { e.preventDefault(); hxsk.openKeyPage(p.kind); });
+      guide.appendChild(link);
+    }
+    if (p.freeQuota) guide.appendChild(el('span', 'guide-note', '额度：' + p.freeQuota));
+    if (p.note) guide.appendChild(el('span', 'guide-note muted', p.note));
+    wrap.appendChild(guide);
+
+    body.appendChild(wrap);
   }
 }
 

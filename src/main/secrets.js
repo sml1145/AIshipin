@@ -29,6 +29,94 @@ const DEFAULT_CONFIG = {
 /** 支持的密钥种类，与 models.json 的 provider 对应 */
 const SECRET_KINDS = ['dashscope', 'siliconflow', 'modelscope', 'huggingface', 'replicate', 'fal'];
 
+/**
+ * 各云端通道的申请引导（降低"要去哪弄 Key"的门槛）
+ *
+ * verified=true 的链接是本次开发时抓取官方文档核实过的确切地址；
+ * verified=false 的只给官网根地址 + 文字指引，绝不编造深链接（宁可不精确，不可给错）。
+ *
+ * freeQuota：如实说明免费额度情况；软件本身不内置额度、不代付。
+ */
+const PROVIDER_META = {
+  dashscope: {
+    label: '阿里云百炼',
+    keyName: 'DASHSCOPE_API_KEY',
+    applyUrl: 'https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key',
+    verified: true,
+    reachableRegion: 'cn',
+    freeQuota: '新用户有免费额度（含视频生成），实名后即可创建 Key',
+    note: '通义万相 Wan3.0 / HappyHorse / Wan2.7 / Wan2.2 全系列，质量最优'
+  },
+  siliconflow: {
+    label: 'SiliconFlow 硅基流动',
+    keyName: 'SILICONFLOW_API_KEY',
+    applyUrl: 'https://cloud.siliconflow.cn/account/ak',
+    verified: true,
+    reachableRegion: 'cn',
+    freeQuota: '注册赠代金券，按量计费',
+    note: '支持本地图片 base64 直传，图生视频首选国内通道'
+  },
+  modelscope: {
+    label: 'ModelScope 魔搭',
+    keyName: 'MODELSCOPE_ACCESS_TOKEN',
+    applyUrl: 'https://www.modelscope.cn',
+    verified: false,
+    reachableRegion: 'cn',
+    freeQuota: '有每日免费额度',
+    note: '登录后到「账号设置 → 访问令牌」创建。注意：本版未将其作为视频生成通道（官方视频端点未获取）'
+  },
+  huggingface: {
+    label: 'Hugging Face',
+    keyName: 'HF_TOKEN',
+    applyUrl: 'https://huggingface.co',
+    verified: false,
+    reachableRegion: 'overseas',
+    freeQuota: 'Inference 需 Pro 套餐；视频模型额度有限',
+    note: '登录后到 Settings → Access Tokens 创建。本机网络实测 huggingface.co 不可达，探测通过才启用'
+  },
+  replicate: {
+    label: 'Replicate',
+    keyName: 'REPLICATE_API_TOKEN',
+    applyUrl: 'https://replicate.com',
+    verified: false,
+    reachableRegion: 'overseas',
+    freeQuota: '无免费额度，按秒计费，需绑卡',
+    note: '登录后到 Account → API tokens 创建。海外通道，本机实测不可达'
+  },
+  fal: {
+    label: 'fal.ai',
+    keyName: 'FAL_KEY',
+    applyUrl: 'https://fal.ai',
+    verified: false,
+    reachableRegion: 'overseas',
+    freeQuota: '无免费额度，按量计费，需绑卡',
+    note: '登录后到 Dashboard → Keys 创建。海外通道，本机实测不可达'
+  }
+};
+
+/** 取某通道的申请引导信息（渲染层展示用，不含任何密钥） */
+function getProviderMeta(kind) {
+  return PROVIDER_META[kind] || null;
+}
+
+/**
+ * 取某通道 Key 的申请页 URL —— 供主进程 shell.openExternal 使用。
+ * 只返回代码内固定的官方 URL，绝不接受外部传入的任意 URL（防钓鱼）。
+ */
+function getKeyApplyUrl(kind) {
+  const meta = PROVIDER_META[kind];
+  if (!meta || !meta.applyUrl) return null;
+  // 双重保险：只放行 https 的固定白名单域，杜绝任何被篡改的 URL
+  try {
+    const u = new URL(meta.applyUrl);
+    if (u.protocol !== 'https:') return null;
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+
 class SecretStore {
   /**
    * @param {object} opts
@@ -205,4 +293,4 @@ function maskSecret(secret) {
   return `${s.slice(0, 4)}…${s.slice(-4)}`;
 }
 
-module.exports = { SecretStore, DEFAULT_CONFIG, SECRET_KINDS, maskSecret };
+module.exports = { SecretStore, DEFAULT_CONFIG, SECRET_KINDS, maskSecret, PROVIDER_META, getProviderMeta, getKeyApplyUrl };

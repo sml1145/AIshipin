@@ -118,6 +118,9 @@ async function detect(opts = {}) {
     vramWarning: null,
     diskFreeGB: 0,
     cudaDriver: null,
+    // 全部显示适配器名（含 IDD 虚拟适配器），供渲染兼容诊断识别虚拟显示环境。
+    // 注意：gpu/vramGB 只反映主 GPU（nvidia-smi），不含虚拟适配器，两者用途不同。
+    displayAdapters: [],
     detectedAt: new Date().toISOString()
   };
 
@@ -167,7 +170,35 @@ async function detect(opts = {}) {
     result.diskFreeGB = 0;
   }
 
+  // 全部显示适配器名（含 IDD 虚拟适配器）：供渲染兼容诊断识别虚拟显示环境
+  if (process.platform === 'win32') {
+    try {
+      const out = await run('powershell.exe', [
+        '-NoProfile', '-Command',
+        '(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join "`n"'
+      ]);
+      result.displayAdapters = parseAdapterNames(out);
+    } catch { /* 枚举失败不影响主流程，保持空列表 */ }
+  }
+
   return result;
+}
+
+/**
+ * 解析换行分隔的适配器名列表，去空行与重复
+ * @param {string} stdout
+ * @returns {string[]}
+ */
+function parseAdapterNames(stdout) {
+  if (!stdout) return [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of String(stdout).split(/\r?\n/)) {
+    const name = raw.trim();
+    if (!name) continue;
+    if (!seen.has(name)) { seen.add(name); out.push(name); }
+  }
+  return out;
 }
 
 /**
@@ -216,6 +247,7 @@ module.exports = {
   parseNvidiaSmiMemory,
   parseNvidiaSmiCsv,
   parseWmiAdapterRam,
+  parseAdapterNames,
   getDiskFreeBytes,
   assessLocalReadiness,
   runCommand

@@ -123,12 +123,19 @@ body {
 .muted { color: var(--text-soft); line-height: 1.7; }
 
 /* 密钥行 */
-.key-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.key-block { border-bottom: 1px solid var(--border); padding: 10px 0; }
+.key-row { display: flex; align-items: center; gap: 10px; }
 .key-row .kname { width: 130px; flex-shrink: 0; }
-.key-row .kstate { font-size: 12px; }
+.key-row .kstate { font-size: 12px; white-space: nowrap; }
 .key-row .kstate.on { color: var(--ok); }
 .key-row .kstate.off { color: var(--text-soft); }
-.key-row input { flex: 1; }
+.key-row input { flex: 1; min-width: 120px; background: var(--bg-card); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+.key-guide { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; margin-top: 6px; padding-left: 2px; font-size: 12px; }
+.key-link { color: var(--accent); cursor: pointer; text-decoration: none; }
+.key-link:hover { text-decoration: underline; }
+.guide-note { color: var(--text-soft); }
+.guide-note.muted { opacity: .8; }
+
 
 /* 本地模型卡片 */
 .model-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 12px; }

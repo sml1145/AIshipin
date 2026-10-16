@@ -153,6 +153,53 @@ test('硬件解析：WMI 正常小显存不标记可疑', () => {
   assert.equal(r.suspicious, false);
 });
 
+test('适配器名解析：换行分隔、去空行、去重', () => {
+  const sample = 'Todesk Virtual Display Adapter\nMuMu Virtual Display Adapter\nTodesk Virtual Display Adapter\n\nNVIDIA GeForce RTX 4060 Laptop GPU\n';
+  assert.deepEqual(hw.parseAdapterNames(sample), [
+    'Todesk Virtual Display Adapter',
+    'MuMu Virtual Display Adapter',
+    'NVIDIA GeForce RTX 4060 Laptop GPU'
+  ]);
+});
+
+test('适配器名解析：空/null 输入返回空数组，不抛错', () => {
+  assert.deepEqual(hw.parseAdapterNames(''), []);
+  assert.deepEqual(hw.parseAdapterNames(null), []);
+  assert.deepEqual(hw.parseAdapterNames(undefined), []);
+  assert.deepEqual(hw.parseAdapterNames('   \n  \n'), []);
+});
+
+test('适配器名解析：兼容 CRLF 与首尾空白', () => {
+  assert.deepEqual(hw.parseAdapterNames(' A \r\n B \r\n'), ['A', 'B']);
+});
+
+test('硬件探测：displayAdapters 枚举出全部适配器（含 IDD 虚拟适配器）', async () => {
+  const fakeRun = async (cmd, args) => {
+    if (cmd === 'nvidia-smi') return 'NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 610.88\n';
+    const joined = (args || []).join(' ');
+    if (joined.includes('Win32_VideoController') && joined.includes('Name')) {
+      return 'Todesk Virtual Display Adapter\nMuMu Virtual Display Adapter\nGameViewer Virtual Display Adapter\nAMD Radeon 780M Graphics\nNVIDIA GeForce RTX 4060 Laptop GPU\n';
+    }
+    if (joined.includes('AdapterRAM')) return '4294967296\n';
+    throw new Error('unexpected ' + cmd);
+  };
+  const r = await hw.detect({ run: fakeRun, diskProbePath: tmpdir() });
+  assert.equal(r.displayAdapters.length, 5, '应枚举出全部 5 个适配器');
+  assert.ok(r.displayAdapters.some(a => a.includes('Todesk')));
+  assert.ok(r.displayAdapters.some(a => a.includes('NVIDIA')));
+  assert.equal(r.gpu, 'NVIDIA GeForce RTX 4060 Laptop GPU', 'gpu 字段仍只反映主 GPU');
+});
+
+test('硬件探测关键：枚举适配器失败时 displayAdapters 退化为空数组，不影响主探测', async () => {
+  const fakeRun = async (cmd) => {
+    if (cmd === 'nvidia-smi') return 'NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 610.88\n';
+    throw new Error('powershell 不可用');
+  };
+  const r = await hw.detect({ run: fakeRun, diskProbePath: tmpdir() });
+  assert.deepEqual(r.displayAdapters, []);
+  assert.equal(r.vramGB, 8, '显存探测不受适配器枚举失败影响');
+});
+
 test('硬件探测：注入假的 nvidia-smi 输出，验证走可信通道', async () => {
   const fakeRun = async (cmd) => {
     if (cmd === 'nvidia-smi') return 'NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 610.88\n';
