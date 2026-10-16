@@ -35,3 +35,10 @@ desktop.ini
 
 # 探测结果
 netfetch-probe.json
+
+# 排查用的临时探测程序（不得入仓）
+_elprobe*/
+probe*.json
+p2.log
+p2res.txt
+smoke-result.json
