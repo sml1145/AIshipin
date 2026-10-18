@@ -1,8 +1,8 @@
 {
   "name": "huanxiang-shike",
   "productName": "幻想时刻",
-  "version": "1.2.0",
-  "displayVersion": "1.2",
+  "version": "1.3.0",
+  "displayVersion": "1.3",
   "description": "幻想时刻 — 对话式 AI 视频生成桌面软件（云端接口 + 本地免密钥双轨生成，智能模型路由，多通道自动更新）",
   "author": "sml1145",
   "license": "MIT",

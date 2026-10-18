@@ -156,7 +156,7 @@ test('GUI: 应用启动渲染品牌、导航与欢迎消息', async (t) => {
   const { page, errors } = r;
   await page.waitForFunction(() => document.querySelectorAll('.msg').length > 0, null, { timeout: 5000 });
   assert.equal(await page.textContent('.brand span'), '幻想时刻');
-  assert.equal((await page.$$('.nav-btn')).length, 5, '应有 5 个导航项');
+  assert.equal((await page.$$('.nav-btn')).length, 6, '应有 6 个导航项（含新增的诊断页）');
   const welcome = await page.textContent('.msg.assistant .bubble');
   assert.ok(welcome.includes('幻想时刻'), '欢迎消息应渲染');
   assert.equal(errors.length, 0, '页面不应有 JS 错误: ' + errors.join('; '));
@@ -167,7 +167,7 @@ test('GUI: 导航切换视图正确', async (t) => {
   if (!r) { t.skip(); return; }
   const { page } = r;
   await page.waitForFunction(() => document.querySelectorAll('.msg').length > 0);
-  for (const view of ['settings', 'local', 'tasks', 'about', 'chat']) {
+  for (const view of ['settings', 'local', 'tasks', 'diag', 'about', 'chat']) {
     await page.click(`.nav-btn[data-view="${view}"]`);
     const active = await page.$eval(`#view-${view}`, el => el.classList.contains('active'));
     assert.equal(active, true, `点击后 #view-${view} 应 active`);

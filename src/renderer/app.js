@@ -7,9 +7,97 @@
  *   - 所有文本一律先转义再插入 DOM，绝不用 innerHTML 直接塞用户/模型内容（防 XSS）
  *   - 只通过 window.hxsk（preload 白名单）访问能力，不碰 require/fs
  *   - 图片只显示主进程回传的本地路径（file://），不读取文件内容到渲染层
+ *
+ * 健壮性要点（v1.3 修复"点击无反馈"）：
+ *   - 任何失败都必须让用户看得见，绝不静默：桥接缺失、IPC 被拒、异常抛出都要显式提示
+ *   - 顶层不得有裸 hxsk 调用，否则桥接未注入时脚本会中断，导致后续按钮全部绑不上监听
  */
 
-const hxsk = window.hxsk;
+/* ============ 全局错误可见化（必须最先执行）============
+ *
+ * 教训：此前 app.js 在顶层直接 hxsk.on(...)，一旦 preload 未注入 window.hxsk，
+ * 该行抛 TypeError 中断整个脚本 → 其后所有按钮监听器都没绑定 → 表现为
+ * "所有按钮点了没反应"，且因为中断发生在 init() 之前，连错误提示都不显示。
+ * 现在把任何未捕获异常都变成界面上可见的红色横幅。
+ */
+
+/** 在页面顶部显示一条可关闭的错误横幅（用于致命问题）。
+ *  必须可关闭：桥接缺失时若横幅盖住整个界面，用户连「诊断」页都点不进去。 */
+function showFatalBanner(title, detail) {
+  try {
+    let bar = document.getElementById('fatalBanner');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'fatalBanner';
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;' +
+        'background:#7a1f2b;color:#fff;padding:12px 44px 12px 16px;font-size:13px;line-height:1.6;' +
+        'border-bottom:2px solid #ff6b7a;white-space:pre-wrap;font-family:inherit;' +
+        'max-height:45vh;overflow:auto';
+      const closeBtn = document.createElement('button');
+      closeBtn.id = 'fatalBannerClose';
+      closeBtn.setAttribute('aria-label', '关闭');
+      closeBtn.textContent = '×';
+      closeBtn.style.cssText = 'position:absolute;top:6px;right:10px;background:transparent;' +
+        'border:none;color:#fff;font-size:22px;line-height:1;cursor:pointer;padding:2px 8px';
+      closeBtn.addEventListener('click', () => { bar.style.display = 'none'; });
+      bar.appendChild(closeBtn);
+      const text = document.createElement('span');
+      text.id = 'fatalBannerText';
+      bar.appendChild(text);
+      if (document.body) document.body.appendChild(bar);
+      else document.addEventListener('DOMContentLoaded', () => document.body.appendChild(bar));
+    }
+    bar.style.display = '';
+    const textEl = bar.querySelector('#fatalBannerText');
+    if (textEl) textEl.textContent = title + (detail ? '\n' + detail : '');
+  } catch (e) { /* 连 DOM 都不可用时无能为力 */ }
+}
+
+window.addEventListener('error', (e) => {
+  showFatalBanner('⚠ 界面脚本出错（请把这段截图反馈）',
+    `${e.message || e.error}\n位置: ${(e.filename || '').split('/').pop()}:${e.lineno}`);
+});
+
+// 未处理的 Promise 拒绝 —— 这正是"点击按钮毫无反应"的元凶：
+// 此前 14 个点击处理器缺 try/catch，IPC 被拒时异常被静默丢弃
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e.reason;
+  const msg = (r && (r.message || r.error)) || String(r);
+  showFatalBanner('⚠ 操作失败（请把这段截图反馈）', msg);
+});
+
+/* ============ 桥接守卫 ============
+ * preload 可能因 sandbox / 打包路径 / 加载顺序而未注入 window.hxsk。
+ * 这种情况下绝不能静默死亡：用一个"安全代理"兜底，使任何方法调用都
+ *   ① 不再抛 TypeError（否则顶层 hxsk.on(...) 会中断整个脚本，后续按钮全绑不上）
+ *   ② 显示明确的错误横幅，告诉用户到底怎么了、能怎么办
+ */
+const REAL_HXSK = window.hxsk;
+let hxsk;
+if (REAL_HXSK) {
+  hxsk = REAL_HXSK;
+} else {
+  const bridgeMissingMsg =
+    '界面桥接未加载（window.hxsk 不存在），所有功能不可用。\n' +
+    '可能原因：安装文件损坏、被安全软件拦截、或直接从压缩包内运行。\n' +
+    '建议：卸载后重新安装最新版；若仍如此，请把本提示截图反馈。';
+  showFatalBanner('⚠ 界面桥接未加载', bridgeMissingMsg);
+  hxsk = new Proxy({}, {
+    get(_t, prop) {
+      // 事件订阅返回空操作，避免顶层调用中断脚本
+      if (prop === 'on') return () => () => {};
+      // 其余方法调用一律返回被拒绝的 Promise，由 unhandledrejection 或调用方 catch 呈现
+      return () => Promise.reject(new Error(bridgeMissingMsg));
+    }
+  });
+}
+
+/**
+ * 初始化期间各步骤的失败记录。
+ * 必须声明在所有顶层 safeOn() 调用之前 —— 否则顶层调用一旦触发 push 就会撞上
+ * const 的暂时性死区（TDZ）ReferenceError，把"可见的错误"变成"脚本中断"。
+ */
+const initErrors = [];
 
 /* ============ 极简安全 Markdown ============ */
 
@@ -76,6 +164,27 @@ function fileUrl(p) {
   return 'file:///' + p.replace(/\\/g, '/');
 }
 
+/**
+ * 统一的点击兜底包装。
+ * 教训：此前多个点击处理器直接调用 hxsk.*，IPC 被拒时变成未处理的 Promise 拒绝，
+ * 异常被静默丢弃 —— 用户点了按钮【毫无反应也没有报错】，无从判断是卡住还是坏了。
+ * 用它包装后，任何失败都会变成一条可见的 toast + 致命横幅。
+ *
+ * @param {string} label 操作名（用于提示文案，如"打开文件夹"）
+ * @param {Function} fn 实际处理逻辑，可以是 async
+ */
+function guardClick(label, fn) {
+  return async (...args) => {
+    try {
+      return await fn(...args);
+    } catch (err) {
+      const msg = (err && (err.message || err.error)) || String(err);
+      toast(`${label}失败：${msg}`, 'err');
+      showFatalBanner(`⚠ ${label}失败`, msg + '\n请把这段截图反馈以便修复。');
+    }
+  };
+}
+
 /* ============ 全局状态 ============ */
 
 const state = {
@@ -101,6 +210,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     if (btn.dataset.view === 'local') renderLocalModels();
     if (btn.dataset.view === 'settings') renderSettings();
     if (btn.dataset.view === 'tasks') renderTasks();
+    if (btn.dataset.view === 'diag') renderDiag();
   });
 });
 
@@ -236,7 +346,7 @@ function finishTask(nodes, result) {
       const bar = el('div');
       const openBtn = el('button', 'ghost-btn', '在文件夹中显示');
       openBtn.style.marginTop = '8px';
-      openBtn.addEventListener('click', () => hxsk.showItemInFolder(r.localPath));
+      openBtn.addEventListener('click', guardClick('打开所在文件夹', () => hxsk.showItemInFolder(r.localPath)));
       bar.appendChild(openBtn);
       nodes.videoSlot.appendChild(bar);
     }
@@ -285,14 +395,59 @@ function renderImagePreviews() {
   });
 }
 
+/**
+ * 选择图片（症状"＋图片拉不起文件夹"的修复点）
+ *
+ * 此前这里没有任何 try/catch：一旦 IPC 被拒（主进程 handler 未注册、或返回结构不符），
+ * 就变成未处理的 Promise 拒绝 —— 用户点击后【完全没有任何反应，也没有报错】。
+ * 现在：点击立即给视觉反馈，失败明确提示原因，成功兼容多种返回形状。
+ */
 $('#btnAddImage').addEventListener('click', async () => {
-  const p = await hxsk.pickImage();
-  if (p) { state.attachedImages.push(p); renderImagePreviews(); previewCurrentRoute(); }
+  const btn = $('#btnAddImage');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '打开中…';
+  try {
+    const r = await hxsk.pickImage();
+    // 兼容三种可能的返回：字符串路径 / {paths:[...]} / null（用户取消）
+    let picked = null;
+    if (typeof r === 'string' && r) picked = [r];
+    else if (r && Array.isArray(r.paths) && r.paths.length) picked = r.paths;
+    else if (r && typeof r.path === 'string' && r.path) picked = [r.path];
+
+    if (picked) {
+      for (const p of picked) {
+        if (!state.attachedImages.includes(p)) state.attachedImages.push(p);
+      }
+      renderImagePreviews();
+      previewCurrentRoute();
+      toast(`已添加 ${picked.length} 张图片`, 'ok');
+    } else {
+      toast('未选择图片（已取消）', '');
+    }
+  } catch (err) {
+    const msg = (err && (err.message || err.error)) || String(err);
+    toast('打开图片选择器失败：' + msg, 'err');
+    showFatalBanner('⚠ 无法打开图片选择器', msg + '\n请把这段截图反馈以便修复。');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 });
 
-$('#btnSend').addEventListener('click', handleSend);
+// 生成按钮：handleSend 内部已有 try/catch，这里再兜一层，确保任何意外都可见
+$('#btnSend').addEventListener('click', async () => {
+  try { await handleSend(); }
+  catch (err) {
+    toast('生成失败：' + ((err && (err.message || err.error)) || err), 'err');
+    const b = $('#btnSend'); if (b) b.disabled = false;
+  }
+});
 $('#promptInput').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    handleSend().catch(err => toast('生成失败：' + ((err && (err.message || err.error)) || err), 'err'));
+  }
 });
 
 let previewTimer = null;
@@ -314,7 +469,17 @@ $('#chkOffline').addEventListener('change', previewCurrentRoute);
 
 /* ============ 任务进度事件 ============ */
 
-hxsk.on('task:progress', (payload) => {
+/**
+ * 受保护的事件订阅。
+ * 教训：此前顶层直接写 hxsk.on(...)，一旦桥接未注入就抛 TypeError 中断整个脚本，
+ * 导致其后所有按钮的监听器都绑不上 —— 表现为"所有按钮点了都没反应"。
+ */
+function safeOn(channel, handler) {
+  try { hxsk.on(channel, handler); }
+  catch (err) { initErrors.push(`订阅事件 ${channel}：${(err && (err.message || err.error)) || err}`); }
+}
+
+safeOn('task:progress', (payload) => {
   if (!payload) return;
   // 捕获新建任务的 id，使取消按钮在长任务期间可用
   if (payload.event === 'created' && payload.id) {
@@ -507,7 +672,7 @@ function renderTasks() {
     if (h.path) {
       const btn = el('button', 'ghost-btn', '在文件夹中显示');
       btn.style.marginTop = '8px';
-      btn.addEventListener('click', () => hxsk.showItemInFolder(h.path));
+      btn.addEventListener('click', guardClick('打开所在文件夹', () => hxsk.showItemInFolder(h.path)));
       card.appendChild(btn);
     }
     body.appendChild(card);
@@ -517,15 +682,23 @@ function renderTasks() {
 /* ============ 设置 ============ */
 
 async function renderSettings() {
-  state.config = await hxsk.getConfig();
-  state.secrets = (await hxsk.listSecrets()).configured || {};
+  // 形状归一化：主进程 config:get 返回配置对象、secret:list 返回 {configured}、
+  // secret:providers 返回数组。这里对每个都做容错，避免任一形状漂移就让整个设置页抛
+  // "not iterable / cannot read property" 而白屏（此前 providers 直接 for...of 就崩过）。
+  state.config = (await hxsk.getConfig().catch(() => null)) || {};
+  const sec = (await hxsk.listSecrets().catch(() => null)) || {};
+  state.secrets = sec.configured || {};
   $('#cfgWorkspace').value = state.config.workspaceId || '';
-  $('#cfgMirrors').value = (state.config.extraMirrors || []).join('\n');
+  $('#cfgMirrors').value = (Array.isArray(state.config.extraMirrors) ? state.config.extraMirrors : []).join('\n');
   $('#cfgAutoUpdate').checked = state.config.autoCheckUpdate !== false;
 
-  let providers = [];
-  try { providers = await hxsk.listProviders(); }
-  catch (e) { providers = []; }
+  let providersRaw = null;
+  try { providersRaw = await hxsk.listProviders(); }
+  catch (e) { providersRaw = null; }
+  // 兼容 数组 / {providers:[]} / {ok,providers} 三种形状，最终一定得到数组
+  const providers = Array.isArray(providersRaw)
+    ? providersRaw
+    : (providersRaw && Array.isArray(providersRaw.providers) ? providersRaw.providers : []);
 
   const body = $('#keysBody');
   body.innerHTML = '';
@@ -564,9 +737,9 @@ async function renderSettings() {
 
     if (p.configured) {
       const clearBtn = el('button', 'ghost-btn', '清除');
-      clearBtn.addEventListener('click', async () => {
+      clearBtn.addEventListener('click', guardClick('清除密钥', async () => {
         await hxsk.clearSecret(p.kind); toast('已清除', 'ok'); renderSettings(); updateTrackBadge();
-      });
+      }));
       row.appendChild(clearBtn);
     }
     wrap.appendChild(row);
@@ -577,7 +750,10 @@ async function renderSettings() {
       const link = el('a', 'key-link', p.linkVerified ? '→ 去哪申请 Key' : '→ 打开官网申请');
       link.href = '#';
       link.title = p.linkVerified ? p.applyUrl : (p.applyUrl + '（链接未逐一核实，登录后自行找 API Key / Tokens 入口）');
-      link.addEventListener('click', (e) => { e.preventDefault(); hxsk.openKeyPage(p.kind); });
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        guardClick('打开申请页', () => hxsk.openKeyPage(p.kind))(e);
+      });
       guide.appendChild(link);
     }
     if (p.freeQuota) guide.appendChild(el('span', 'guide-note', '额度：' + p.freeQuota));
@@ -588,7 +764,7 @@ async function renderSettings() {
   }
 }
 
-$('#btnSaveConfig').addEventListener('click', async () => {
+$('#btnSaveConfig').addEventListener('click', guardClick('保存设置', async () => {
   const patch = {
     workspaceId: $('#cfgWorkspace').value.trim(),
     extraMirrors: $('#cfgMirrors').value.split('\n').map(s => s.trim()).filter(Boolean),
@@ -596,58 +772,84 @@ $('#btnSaveConfig').addEventListener('click', async () => {
   };
   await hxsk.setConfig(patch);
   toast('设置已保存', 'ok');
-});
+}));
 
 /* ============ 更新 ============ */
 
 $('#btnCheckUpdate').addEventListener('click', async () => {
   const overlay = $('#updateOverlay');
   const body = $('#updateBody');
+  const btn = $('#btnCheckUpdate');
   $('#updateTitle').textContent = '检测更新';
   body.innerHTML = '';
   overlay.classList.remove('hidden');
   body.appendChild(el('div', '', '正在并行探测多个更新通道…'));
+  btn.disabled = true;
 
-  const r = await hxsk.checkUpdate({ downloadIfNew: false });
-  body.innerHTML = '';
-  if (r.channelSummary) body.appendChild(el('div', 'muted', r.channelSummary));
-  if (r.ok && !r.needUpdate) {
-    body.appendChild(el('div', 'ch-ok', `✓ ${r.message}`));
-  } else if (r.ok && r.needUpdate) {
-    body.appendChild(el('div', '', `发现新版本 ${r.latest}（当前 ${r.current}）`));
-    const dlBtn = el('button', 'primary-btn', '下载并安装');
-    dlBtn.style.marginTop = '12px';
-    dlBtn.addEventListener('click', () => doDownloadInstall(body));
-    body.appendChild(dlBtn);
-  } else {
-    body.appendChild(el('div', 'ch-bad', `✗ ${r.message}`));
-    if (r.detail) body.appendChild(el('div', 'muted', r.detail));
+  try {
+    const r = await hxsk.checkUpdate({ downloadIfNew: false });
+    body.innerHTML = '';
+    if (r && r.channelSummary) body.appendChild(el('div', 'muted', r.channelSummary));
+    if (r && r.ok && !r.needUpdate) {
+      body.appendChild(el('div', 'ch-ok', `✓ ${r.message}`));
+    } else if (r && r.ok && r.needUpdate) {
+      body.appendChild(el('div', '', `发现新版本 ${r.latest}（当前 ${r.current}）`));
+      const dlBtn = el('button', 'primary-btn', '下载并安装');
+      dlBtn.style.marginTop = '12px';
+      dlBtn.addEventListener('click', guardClick('下载更新', () => doDownloadInstall(body)));
+      body.appendChild(dlBtn);
+    } else {
+      body.appendChild(el('div', 'ch-bad', `✗ ${(r && r.message) || '检测更新失败'}`));
+      if (r && r.detail) body.appendChild(el('div', 'muted', r.detail));
+      const manualBtn = el('button', 'ghost-btn', '打开下载页面');
+      manualBtn.style.marginTop = '12px';
+      manualBtn.addEventListener('click', guardClick('打开下载页面', () => hxsk.openManualUpdate()));
+      body.appendChild(manualBtn);
+    }
+  } catch (err) {
+    // 关键：检测更新失败也必须在浮层里说清原因，不能只留一句 toast 或什么都不显示
+    const msg = (err && (err.message || err.error)) || String(err);
+    body.innerHTML = '';
+    body.appendChild(el('div', 'ch-bad', '✗ 检测更新失败'));
+    body.appendChild(el('div', 'muted', msg));
     const manualBtn = el('button', 'ghost-btn', '打开下载页面');
     manualBtn.style.marginTop = '12px';
-    manualBtn.addEventListener('click', () => hxsk.openManualUpdate());
+    manualBtn.addEventListener('click', guardClick('打开下载页面', () => hxsk.openManualUpdate()));
     body.appendChild(manualBtn);
+    toast('检测更新失败：' + msg, 'err');
+  } finally {
+    btn.disabled = false;
   }
 });
 
 async function doDownloadInstall(body) {
   body.innerHTML = '';
   body.appendChild(el('div', '', '正在多通道并行下载并校验…'));
-  const dl = await hxsk.downloadUpdate();
+  let dl;
+  try {
+    dl = await hxsk.downloadUpdate();
+  } catch (err) {
+    const msg = (err && (err.message || err.error)) || String(err);
+    body.innerHTML = '';
+    body.appendChild(el('div', 'ch-bad', '✗ 下载失败'));
+    body.appendChild(el('div', 'muted', msg));
+    return;
+  }
   body.innerHTML = '';
-  if (dl.ok) {
+  if (dl && dl.ok) {
     body.appendChild(el('div', 'ch-ok', `✓ ${dl.message}`));
-    body.appendChild(el('div', 'muted', `SHA512 校验：${dl.sha512Verified ? '已通过' : '未提供校验值（仅校验大小）'}\n下载通道：${dl.winnerChannel || '—'}\n大小：${(dl.bytes / 1024 / 1024).toFixed(1)} MB`));
+    body.appendChild(el('div', 'muted', `SHA512 校验：${dl.sha512Verified ? '已通过' : '未提供校验值（仅校验大小）'}\n清单 Ed25519 验签：${dl.manifestSigned ? '已通过' : '未提供签名'}\n下载通道：${dl.winnerChannel || '—'}\n大小：${(dl.bytes / 1024 / 1024).toFixed(1)} MB`));
     const insBtn = el('button', 'primary-btn', '立即安装（应用将退出）');
     insBtn.style.marginTop = '12px';
-    insBtn.addEventListener('click', async () => { await hxsk.installUpdate(); });
+    insBtn.addEventListener('click', guardClick('安装更新', async () => { await hxsk.installUpdate(); }));
     body.appendChild(insBtn);
   } else {
-    body.appendChild(el('div', 'ch-bad', `✗ ${dl.message}`));
-    if (dl.detail) body.appendChild(el('div', 'muted', dl.detail));
-    if (dl.manualUrl) {
+    body.appendChild(el('div', 'ch-bad', `✗ ${(dl && dl.message) || '下载失败'}`));
+    if (dl && dl.detail) body.appendChild(el('div', 'muted', dl.detail));
+    if (dl && dl.manualUrl) {
       const b = el('button', 'ghost-btn', '打开下载页面');
       b.style.marginTop = '12px';
-      b.addEventListener('click', () => hxsk.openManualUpdate());
+      b.addEventListener('click', guardClick('打开下载页面', () => hxsk.openManualUpdate()));
       body.appendChild(b);
     }
   }
@@ -655,7 +857,7 @@ async function doDownloadInstall(body) {
 
 $('#updateClose').addEventListener('click', () => $('#updateOverlay').classList.add('hidden'));
 
-hxsk.on('update:state', (s) => {
+safeOn('update:state', (s) => {
   if (s && s.phase === 'downloading' && typeof s.percent === 'number') {
     const body = $('#updateBody');
     if (body && $('#updateOverlay') && !$('#updateOverlay').classList.contains('hidden')) {
@@ -670,7 +872,7 @@ hxsk.on('update:state', (s) => {
   }
 });
 
-hxsk.on('update:rollback', (rb) => {
+safeOn('update:rollback', (rb) => {
   if (rb && rb.needed) toast(rb.message, 'err');
 });
 
@@ -683,40 +885,181 @@ function updateTrackBadge() {
   else { badge.textContent = '自检模式'; badge.className = 'track-badge'; }
 }
 
+/* ============ 诊断（本机自曝故障，不靠外部工具）============
+ *
+ * 为什么需要：界面按钮"点了没反应"往往源于某个 IPC 被拒或桥接未注入，
+ * 但用户看不到底层错误。这里逐个调用每个桥接方法，把结果/错误直接呈现出来，
+ * 用户点一下「运行自检」就能拿到确切原因并反馈，无需开发者远程猜测。
+ */
+
+const DIAG_CASES = [
+  { name: '应用信息 app:info', fn: () => hxsk.getAppInfo() },
+  { name: '模型能力库 catalog:get', fn: () => hxsk.getCatalog() },
+  { name: '硬件探测 hardware:detect', fn: () => hxsk.detectHardware(true) },
+  { name: '配置读取 config:get', fn: () => hxsk.getConfig() },
+  { name: '密钥状态 secret:list', fn: () => hxsk.listSecrets() },
+  { name: '通道引导 secret:providers', fn: () => hxsk.listProviders() },
+  { name: '本地模型 local:list', fn: () => hxsk.listLocalModels() },
+  { name: '路由预演 route:preview', fn: () => hxsk.previewRoute({ prompt: '自检：一只猫在草地上奔跑' }) },
+  { name: '更新检测 update:check', fn: () => hxsk.checkUpdate({ downloadIfNew: false }) },
+  { name: '输出目录 shell:showOutputDir', fn: () => hxsk.showOutputDir() }
+];
+
+let lastDiagText = '';
+
+async function runDiag() {
+  const body = $('#diagBody');
+  body.innerHTML = '';
+  const lines = [];
+  const bridgeOk = Boolean(window.hxsk && window.hxsk !== hxsk ? false : hxsk && hxsk.getAppInfo);
+  lines.push(`桥接对象 window.hxsk：${window.hxsk ? '已注入' : '缺失（preload 未加载）'}`);
+  lines.push('');
+
+  let pass = 0, fail = 0;
+  for (const c of DIAG_CASES) {
+    const row = el('div', 'diag-row');
+    const t0 = Date.now();
+    let ok = false, detail = '';
+    try {
+      const r = await Promise.race([
+        c.fn(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('超时(10s) 未返回')), 10000))
+      ]);
+      ok = true;
+      detail = typeof r === 'object' ? JSON.stringify(r).slice(0, 120) : String(r).slice(0, 120);
+      pass++;
+    } catch (err) {
+      ok = false;
+      detail = String((err && (err.message || err.error)) || err).slice(0, 200);
+      fail++;
+    }
+    const ms = Date.now() - t0;
+    row.appendChild(el('span', ok ? 'diag-ok' : 'diag-bad', ok ? '✓' : '✗'));
+    row.appendChild(el('span', 'diag-name', c.name));
+    row.appendChild(el('span', 'diag-ms', ms + 'ms'));
+    row.appendChild(el('span', 'diag-detail ' + (ok ? 'muted' : 'diag-err'), detail));
+    body.appendChild(row);
+    lines.push(`${ok ? '✓' : '✗'} ${c.name} (${ms}ms) ${detail}`);
+  }
+
+  const summary = el('div', 'diag-summary ' + (fail === 0 ? 'ch-ok' : 'ch-bad'),
+    `\n小结：${pass} 项通过，${fail} 项失败。${bridgeOk ? '' : '【桥接缺失，所有功能不可用】'}`);
+  body.appendChild(summary);
+  lines.push('');
+  lines.push(`小结：${pass} 通过 / ${fail} 失败`);
+
+  // 附环境信息，便于定位
+  let env = '';
+  try {
+    const info = await hxsk.getAppInfo();
+    env = `版本 ${info.version} | Electron ${info.electron} | ${info.platform}`;
+  } catch (e) { env = '版本信息读取失败'; }
+  lines.unshift('=== 幻想时刻 界面自检 ===');
+  lines.splice(1, 0, env);
+  lastDiagText = lines.join('\n');
+}
+
+function renderDiag() {
+  const body = $('#diagBody');
+  if (!body) return;
+  if (body.children.length === 0) {
+    body.appendChild(el('p', 'muted', '尚未运行。点右上角「运行自检」。'));
+  }
+}
+
+$('#btnRunDiag').addEventListener('click', guardClick('运行自检', async () => {
+  $('#btnRunDiag').disabled = true;
+  $('#btnRunDiag').textContent = '检测中…';
+  try { await runDiag(); }
+  finally { $('#btnRunDiag').disabled = false; $('#btnRunDiag').textContent = '运行自检'; }
+}));
+
+$('#btnCopyDiag').addEventListener('click', guardClick('复制结果', async () => {
+  if (!lastDiagText) { toast('请先运行自检', 'err'); return; }
+  try {
+    await navigator.clipboard.writeText(lastDiagText);
+    toast('已复制，请粘贴反馈', 'ok');
+  } catch (e) {
+    // 剪贴板不可用时，把结果直接显示出来供手动复制
+    const body = $('#diagBody');
+    const pre = document.createElement('pre');
+    pre.className = 'diag-raw';
+    pre.textContent = lastDiagText;
+    body.appendChild(pre);
+    toast('剪贴板不可用，已在下方显示结果', 'err');
+  }
+}));
+
 /* ============ 初始化 ============ */
 
-async function init() {
-  state.appInfo = await hxsk.getAppInfo();
-  $('#aboutVersion').textContent = `${state.appInfo.displayVersion}（${state.appInfo.version}）`;
-  state.catalog = await hxsk.getCatalog();
-  state.config = await hxsk.getConfig();
-  state.secrets = (await hxsk.listSecrets()).configured || {};
+/**
+ * 逐步隔离错误：此前 4 个 await 串成一条链，任一 IPC 失败就会让整个 init 中断，
+ * 导致硬件信息、轨道徽标、欢迎消息全部不显示 —— 用户看到的是一个"死"界面。
+ * 现在每步独立容错，单项失败只影响该项，并把失败如实显示出来。
+ */
+async function safeStep(name, fn, fallback) {
+  try {
+    return await fn();
+  } catch (err) {
+    initErrors.push(`${name}：${(err && (err.message || err.error)) || err}`);
+    return fallback;
+  }
+}
 
-  // 硬件
+async function init() {
+  state.appInfo = await safeStep('读取应用信息', () => hxsk.getAppInfo(), {});
+  const ver = $('#aboutVersion');
+  if (ver) {
+    ver.textContent = state.appInfo.displayVersion
+      ? `${state.appInfo.displayVersion}（${state.appInfo.version}）`
+      : '未知（应用信息读取失败）';
+  }
+
+  state.catalog = await safeStep('加载模型能力库', () => hxsk.getCatalog(), { models: [], intents: [], schemaVersion: '?' });
+  state.config = await safeStep('读取配置', () => hxsk.getConfig(), {});
+  const secrets = await safeStep('读取密钥状态', () => hxsk.listSecrets(), { configured: {} });
+  state.secrets = (secrets && secrets.configured) || {};
+
+  // 硬件（后台探测，不阻塞）
   hxsk.detectHardware().then(hw => {
-    state.hardware = hw;
-    $('#hwSummary').textContent = `${hw.gpu || '无 GPU'}\n显存 ${hw.vramGB}GB · 内存 ${hw.totalRamGB}GB`;
-    if (hw.vramWarning) $('#hwSummary').title = hw.vramWarning;
-  }).catch(() => { $('#hwSummary').textContent = '硬件探测失败'; });
-  hxsk.on('hardware:ready', (hw) => {
-    state.hardware = hw;
-    $('#hwSummary').textContent = `${hw.gpu || '无 GPU'}\n显存 ${hw.vramGB}GB · 内存 ${hw.totalRamGB}GB`;
-  });
+    state.hardware = hw || {};
+    const s = $('#hwSummary');
+    if (s) {
+      s.textContent = `${hw.gpu || '无 GPU'}\n显存 ${hw.vramGB}GB · 内存 ${hw.totalRamGB}GB`;
+      if (hw.vramWarning) s.title = hw.vramWarning;
+    }
+  }).catch(() => { const s = $('#hwSummary'); if (s) s.textContent = '硬件探测失败'; });
+  try {
+    hxsk.on('hardware:ready', (hw) => {
+      state.hardware = hw || {};
+      const s = $('#hwSummary');
+      if (s) s.textContent = `${hw.gpu || '无 GPU'}\n显存 ${hw.vramGB}GB · 内存 ${hw.totalRamGB}GB`;
+    });
+  } catch (err) { initErrors.push('订阅硬件事件：' + ((err && err.message) || err)); }
 
   updateTrackBadge();
 
   // 关于页详情
   const detail = $('#aboutDetail');
-  detail.innerHTML = '';
-  const mk = (k, v) => { const d = el('div'); d.textContent = `${k}：${v}`; detail.appendChild(d); };
-  mk('FFmpeg', state.appInfo.ffmpeg || '未找到');
-  mk('数据目录', state.appInfo.userData);
-  mk('输出目录', state.appInfo.outputDir);
-  mk('模型库版本', 'schemaVersion ' + state.catalog.schemaVersion);
-  mk('可用模型', state.catalog.models.length + ' 个');
+  if (detail) {
+    detail.innerHTML = '';
+    const mk = (k, v) => { const d = el('div'); d.textContent = `${k}：${v}`; detail.appendChild(d); };
+    mk('FFmpeg', state.appInfo.ffmpeg || '未找到');
+    mk('数据目录', state.appInfo.userData || '未知');
+    mk('输出目录', state.appInfo.outputDir || '未知');
+    mk('模型库版本', 'schemaVersion ' + state.catalog.schemaVersion);
+    mk('可用模型', (state.catalog.models || []).length + ' 个');
+  }
 
   // 欢迎消息
   addMessage('assistant', '你好，我是**幻想时刻**。上传一张图片、写一段描述，我就能帮你生成视频。\n\n没有 API Key 也没关系——我会用「自检模式」先跑通全流程（产出的是带水印的样例视频，非真实 AI 结果）。想要真实生成，请到「设置」配置云端 API Key，或在「本地模型」页下载离线模型包。', { markdown: true });
+
+  // 初始化过程中有步骤失败时，如实告知用户（而不是假装一切正常）
+  if (initErrors.length) {
+    addMessage('assistant',
+      `⚠ 部分功能初始化失败，以下能力可能不可用：\n\n${initErrors.map(e => '- ' + e).join('\n')}\n\n` +
+      `其余功能仍可正常使用。请把这段信息截图反馈以便修复。`, { markdown: true });
+  }
 
   // 启动自动检查更新
   if (state.config.autoCheckUpdate) {
@@ -724,11 +1067,13 @@ async function init() {
       try {
         const r = await hxsk.checkUpdate({ downloadIfNew: false });
         if (r.ok && r.needUpdate) toast(`发现新版本 ${r.latest}，点击右上角「检测更新」升级`, 'ok');
-      } catch { /* 静默 */ }
+      } catch { /* 自动检查失败不打扰用户，手动检测时再报错 */ }
     }, 2500);
   }
 }
 
 init().catch(err => {
-  addMessage('assistant', '初始化失败：' + (err.message || err), {});
+  // init 自身整体失败也必须可见（此前只有这里能提示，但顶层裸调用会让它根本执行不到）
+  addMessage('assistant', '⚠ 初始化失败：' + ((err && (err.message || err.error)) || err) + '\n\n界面可能无法正常工作，请把这段信息截图反馈。', {});
+  showFatalBanner('⚠ 初始化失败', String((err && (err.message || err.error)) || err));
 });

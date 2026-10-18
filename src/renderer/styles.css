@@ -164,3 +164,15 @@ body {
 
 .about-detail { font-size: 12.5px; color: var(--text-soft); line-height: 1.8; margin: 10px 0; }
 .about-detail div { margin: 2px 0; }
+
+/* 诊断面板 */
+.diag-body { font-size: 13px; }
+.diag-row { display: flex; align-items: baseline; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+.diag-row .diag-ok { color: var(--ok); font-weight: 700; }
+.diag-row .diag-bad { color: var(--err); font-weight: 700; }
+.diag-row .diag-name { min-width: 200px; color: var(--text); }
+.diag-row .diag-ms { min-width: 62px; color: var(--text-soft); font-variant-numeric: tabular-nums; }
+.diag-row .diag-detail { flex: 1; word-break: break-all; font-size: 12px; }
+.diag-row .diag-err { color: var(--err); }
+.diag-summary { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: var(--bg-soft); font-size: 13px; }
+.diag-raw { margin-top: 12px; padding: 10px; background: #0b0e13; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 40vh; overflow: auto; }

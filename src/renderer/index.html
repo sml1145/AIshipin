@@ -2,8 +2,16 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
+  <!--
+    CSP 说明（v1.3 关键修复）：
+    本应用用 loadFile() 以 file:// 加载页面，其 origin 是 opaque(null)，
+    'self' 匹配不到同目录的 file:// 脚本/样式 —— 会导致 app.js 被拦截、
+    整个界面脚本不执行，表现为"所有按钮点击都没有反应"。
+    因此 script-src / style-src 必须显式包含 file:。
+    本应用不加载任何远程内容，XSS 防护由 app.js 的全量转义（escapeHtml）保证。
+  -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' file: data: blob:; media-src 'self' file: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'" />
+        content="default-src 'self' file:; script-src 'self' file:; style-src 'self' 'unsafe-inline' file:; img-src 'self' file: data: blob:; media-src 'self' file: blob:; connect-src 'self' file:; font-src 'self' file: data:; object-src 'none'; base-uri 'none'" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>幻想时刻</title>
   <link rel="stylesheet" href="styles.css" />
@@ -21,6 +29,7 @@
         <button class="nav-btn" data-view="local">本地模型</button>
         <button class="nav-btn" data-view="tasks">任务记录</button>
         <button class="nav-btn" data-view="settings">设置</button>
+        <button class="nav-btn" data-view="diag">诊断</button>
         <button class="nav-btn" data-view="about">关于</button>
       </nav>
       <div class="sidebar-footer">
@@ -88,6 +97,21 @@
             <label><input type="checkbox" id="cfgAutoUpdate" /> 启动时自动检查更新</label>
           </div>
           <button id="btnSaveConfig" class="primary-btn">保存设置</button>
+        </div>
+      </section>
+
+      <!-- 诊断 -->
+      <section class="view" id="view-diag">
+        <header class="view-header">
+          <h1>诊断</h1>
+          <div class="header-actions">
+            <button id="btnRunDiag" class="primary-btn">运行自检</button>
+            <button id="btnCopyDiag" class="ghost-btn">复制结果</button>
+          </div>
+        </header>
+        <div class="view-body">
+          <p class="muted">逐个调用界面↔主进程的每个接口，报告哪个通、哪个报什么错。若按钮点击无反应，请把这里的结果截图反馈。</p>
+          <div id="diagBody" class="diag-body"><p class="muted">尚未运行。点右上角「运行自检」。</p></div>
         </div>
       </section>
 

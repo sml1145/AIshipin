@@ -254,13 +254,20 @@ function registerIpc() {
     name: pkg.productName,
     version: pkg.version,
     displayVersion: pkg.displayVersion,
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    platform: process.platform,
+    arch: process.arch,
+    isPackaged: app.isPackaged,
     ffmpeg: ffmpegMod.resolveFfmpegPath(),
     userData: PATHS.userData,
     outputDir: PATHS.outputDir
   }));
 
   // 硬件探测（带缓存，避免每次都跑 nvidia-smi）
-  ipcMain.handle('hardware:detect', async (force) => {
+  // 注意：ipcMain.handle 的第一个入参是 event，force 是第二个 —— 此前误写成 (force)
+  // 会让 force 实际拿到 event 对象，force===true 永远不成立，导致强制刷新失效。
+  ipcMain.handle('hardware:detect', async (_e, force) => {
     if (!hwCache || force === true) hwCache = await hardware.detect({ diskProbePath: PATHS.outputDir });
     return hwCache;
   });
